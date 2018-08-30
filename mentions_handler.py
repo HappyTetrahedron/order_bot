@@ -131,6 +131,8 @@ class MentionsHandler(Handler):
                     for entity in message.entities:
                         if entity.type == "mention":
                             unicode_text = message.text.encode('utf-16')
+                            # Multiply all offsets by 2 and add 2 (4 in the first case because we want to get rid of the @)
+                            # I don't know, okay? I just don't know.
                             mentioned = unicode_text[entity.offset*2  + 4:entity.offset*2 + entity.length*2 + 2]
                             if mentioned.decode('utf-16') == self.name:
                                 res = True
