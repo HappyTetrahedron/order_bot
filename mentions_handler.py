@@ -130,8 +130,9 @@ class MentionsHandler(Handler):
                 if message.entities is not None:
                     for entity in message.entities:
                         if entity.type == "mention":
-                            mentioned = message.text[entity.offset + 1:entity.offset + entity.length]
-                            if mentioned == self.name:
+                            unicode_text = message.text.encode('utf-16')
+                            mentioned = unicode_text[entity.offset*2  + 4:entity.offset*2 + entity.length*2 + 2]
+                            if mentioned.decode('utf-16') == self.name:
                                 res = True
 
             if self.filters:
