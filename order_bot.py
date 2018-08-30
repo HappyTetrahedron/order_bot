@@ -72,24 +72,43 @@ class PollBot:
             }
             orders.upsert(new_order, ['chat', 'user_id'])
 
-            bot.edit_message_text(
-                self.get_updated_message(collection),
-                chat_id=collection['chat'],
-                message_id=collection['message'],
-                parse_mode="markdown"
-            )
+            self.update_order_message(bot, collection)
 
         else:
             update.message.reply_text("Uh oh - there is no ongoing order in this chat. Please /start me first.")
 
+    def delete(self, bot, update):
+        collections = self.db['order_collections']
+        collection = collections.find_one(chat=update.message.chat.id)
+        if not collection:
+            return
+        orders = self.db['orders']
+
+        orders.delete(collection_uuid=collection['uuid'], user_id=update.message.from_user.id)
+
+        self.update_order_message(bot, collection)
+
+    def update_order_message(self, bot, collection):
+        bot.edit_message_text(
+            self.get_updated_message(collection),
+            chat_id=collection['chat'],
+            message_id=collection['message'],
+            parse_mode="markdown"
+        )
+
     def get_updated_message(self, collection):
         text = "=== Your Orders ==="
+        order_text = ""
 
         table = self.db['orders']
         orders = table.find(collection_uuid=collection['uuid'])
 
         for order in orders:
-            text += "\n*{}*: {}\n".format(order['user_name'], order['order_text'][:403])
+            order_text += "\n*{}*: {}\n".format(order['user_name'], order['order_text'][:403])
+
+        text += order_text
+        if not order_text:
+            text += "\nThere are currently no orders."
 
         text.strip()
         return text
@@ -128,6 +147,7 @@ class PollBot:
         dp.add_handler(MentionsHandler(self.config['bot_name'], self.mention))
         dp.add_handler(CommandHandler("help", self.send_help))
         dp.add_handler(CommandHandler("start", self.start))
+        dp.add_handler(CommandHandler("delete", self.delete))
 
         # log all errors
         dp.add_error_handler(self.error)
