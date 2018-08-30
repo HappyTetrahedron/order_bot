@@ -59,7 +59,7 @@ class PollBot:
         order_text = update.message.text.replace("@{}".format(self.config['bot_name']), "")
         if len(order_text) > 400:
             order_text = order_text[:400] + "..."
-        order_text = re.sub(r'\n+', "\n", order_text)
+        order_text = re.sub(r'\n\s*', "\n", order_text)
         order_text.strip()
         if collection is not None:
             orders = self.db['orders']
