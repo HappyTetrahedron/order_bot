@@ -89,7 +89,7 @@ class PollBot:
         orders = table.find(collection_uuid=collection['uuid'])
 
         for order in orders:
-            text += "\n**{}:** {}\n".format(order['user_name'], order['order_text'][:403])
+            text += "\n*{}*: {}\n".format(order['user_name'], order['order_text'][:403])
 
         text.strip()
         return text
