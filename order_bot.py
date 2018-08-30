@@ -4,6 +4,7 @@ import random
 import yaml
 import logging
 import dataset
+import re
 
 from uuid import uuid4
 from telegram.ext import Updater, CommandHandler
@@ -54,6 +55,12 @@ class PollBot:
     def mention(self, bot, update):
         collections = self.db['order_collections']
         collection = collections.find_one(chat=update.message.chat.id)
+
+        order_text = update.message.text.replace("@{}".format(self.config['bot_name']), "")
+        if len(order_text) > 400:
+            order_text = order_text[:400] + "..."
+        order_text = re.sub(r'\n+', "\n", order_text)
+        order_text.strip()
         if collection is not None:
             orders = self.db['orders']
             new_order = {
@@ -61,7 +68,7 @@ class PollBot:
                 'chat': update.message.chat.id,
                 'user_id': update.message.from_user.id,
                 'user_name': update.message.from_user.first_name,
-                'order_text': update.message.text.replace("@{}".format(self.config['bot_name']), ""),
+                'order_text': order_text,
             }
             orders.upsert(new_order, ['chat', 'user_id'])
 
@@ -82,8 +89,9 @@ class PollBot:
         orders = table.find(collection_uuid=collection['uuid'])
 
         for order in orders:
-            text += "\n**{}:** {}".format(order['user_name'], order['order_text'])
+            text += "\n**{}:** {}\n".format(order['user_name'], order['order_text'][:403])
 
+        text.strip()
         return text
 
     def get_affirmation(self):
