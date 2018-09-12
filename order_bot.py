@@ -178,7 +178,7 @@ class PollBot:
         validated_orders = self.pizza.create_order(collection['settings']['store_id'], dominos_orders, dominos_menu)
 
         for item in validated_orders['Order']['Coupons']:
-            text += "{}\n".format(dominos_menu.get_deals()[item['Code']]['Name'])
+            text += "- {}\n".format(dominos_menu.get_deals()[item['Code']]['Name'].split('-')[0])
 
         for item in validated_orders['Order']['Products']:
             if 'AutoRemove' in item and item['AutoRemove']:

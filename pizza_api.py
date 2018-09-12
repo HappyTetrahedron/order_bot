@@ -30,16 +30,12 @@ synonyms_large = [
 STANDARD, SMALL, LARGE = 30, 25, 35
 PIZZA_CODE_PREFIX = 'HT'  # H = standard crust. Dunno what the T stands for but it's the only option.
 
-DOUBLE_DEAL_S = 'N050'
-DOUBLE_DEAL_M = 'N051'
-DOUBLE_DEAL_L = 'N052'
-TAKE_3_AWAY = 'L097'
-CHEESY_BREAD = 'BRCHB'
-CRAZY_WEEKDAY = 'N054'
-CRAZY_WEEKDAY_ELIGIBLE_CODES = [
-    '30HTCTS',
-    '30HTCTB',
-    '30HTMRG',
+DEALS = [
+    'N054',  # Crazy Weekday
+    'L097',  # Take 3 Away
+    'N050',  # Double Deal S
+    'N051',  # Double Deal M
+    'N052',  # Double Deal L
 ]
 
 
@@ -86,113 +82,61 @@ class PizzaApi:
         orders = order.split(';')
         return [self._parse_order(part.strip(), menu) for part in orders]
 
-    def optimize_deals(self, order_list, menu, carryout=True):
+    def optimize_deals(self, order_list, menu, store_id, service_method='Carryout'):
         deals = menu.get_deals()
+
+        ordered_item_codes = [i['Code'] for i in order_list]
 
         selected_deals = []
 
-        # See if we need any crazy weekday deals
-        num_crazy_weekday_pizzas = 0
-        if CRAZY_WEEKDAY in deals:
-            today = datetime.date.today()
-            weekday = today.strftime('%a')
-            # only on weekdays
-            if any([weekday.startswith(day) for day in deals[CRAZY_WEEKDAY]['Tags']['Days']]):
-                num_crazy_weekday_pizzas = len([o for o in order_list
-                                                if o['Code'] in CRAZY_WEEKDAY_ELIGIBLE_CODES])
-                for i in range(num_crazy_weekday_pizzas):
+        for deal_id in DEALS:
+            # Is the deal available right now?
+            if deal_id not in deals:
+                continue
+            # Is the deal available on this day of the week?
+            if 'Tags' in deals[deal_id] and 'Days' in deals[deal_id]['Tags']:
+                today = datetime.date.today()
+                weekday = today.strftime('%a')
+                if not any([weekday.startswith(day) for day in deals[deal_id]['Tags']['Days']]):
+                    continue
+            # Is the deal available for this service method?
+            if service_method != deals[deal_id]['Tags']['ValidServiceMethods'] \
+                    and service_method not in deals[deal_id]['Tags']['ValidServiceMethods']:
+                continue
+
+            deal_url = self.config['store']['deals'].format(
+                storeID=store_id,
+                lang=self.config['language'],
+                dealID=deal_id
+            )
+
+            deal_info = requests.get(deal_url, headers=self._get_headers()).json()
+
+            deal_complete = True
+            while deal_complete:
+                items_selected = []
+                for slot in deal_info['ProductGroups']:
+                    for i in range(slot['RequiredQty']):
+                        eligible = slot['ProductCodes']
+                        items_possible = [item in eligible for item in ordered_item_codes]
+                        if any(items_possible):
+                            selected_item = ordered_item_codes[items_possible.index(True)]
+                            items_selected.append(selected_item)
+                            ordered_item_codes.remove(selected_item)
+                        else:
+                            deal_complete = False
+                            break
+                if not deal_complete:
+                    # Could not complete deal: make items available again for other deals
+                    for item in items_selected:
+                        ordered_item_codes.append(item)
+                else:
                     selected_deals.append({
-                        'Code': CRAZY_WEEKDAY,
+                        'Code': deal_id,
                         'Qty': 1,
                     })
 
-        p = self._count_pizza(order_list)
-        size_counts = self._count_pizza_sizes(order_list)
-        c = self._count_cheesy_bread(order_list)
-
-        # Don't take crazy weekday pizzas into account anymore
-        size_counts[1] -= num_crazy_weekday_pizzas # subtract from medium pizzas
-        p -= num_crazy_weekday_pizzas
-
-        # Do we ned any take 3 away deals? (only for carryout)
-        if c > 0 and TAKE_3_AWAY in deals and carryout:
-            cheesy_bread_in_deals = 0
-            while cheesy_bread_in_deals < c and p >= 2:
-                selected_deals.append({
-                    'Code': TAKE_3_AWAY,
-                    'Qty': 1
-                })
-                cheesy_bread_in_deals += 1
-                p -= 2
-                # Figure out which sizes to put into this deal...
-                # Ideally, we want to use up any single pizzas:
-                if len([s for s in size_counts if s == 1]) >= 2:
-                    # Remove two pizzas for which we have only 1 left
-                    size_counts[size_counts.index(1)] -= 1
-                    size_counts[size_counts.index(1)] -= 1
-                # If we have only one single pizza, we want to use that one
-                # and another from the smallest 'stack'
-                elif len([s for s in size_counts if s == 1]) == 1:
-                    size_counts[size_counts.index(1)] -= 1
-                    nonzero_size_counts = [s for s in size_counts if s > 0]
-                    size_counts[size_counts.index(min(nonzero_size_counts))] -= 1
-                # If we have no single pizzas, we'll start eating off the smallest stack.
-                elif len([s for s in size_counts if s == 1]) == 1:
-                    nonzero_size_counts = [s for s in size_counts if s > 0]
-                    size_counts[size_counts.index(min(nonzero_size_counts))] -= 1
-                    nonzero_size_counts = [s for s in size_counts if s > 0]
-                    size_counts[size_counts.index(min(nonzero_size_counts))] -= 1
-
-        # Finally, add double deals:
-        if size_counts[0] >= 2 and DOUBLE_DEAL_S in deals:
-            selected_deals.append({
-                'Code': DOUBLE_DEAL_S,
-                'Qty': 1,
-            })
-        if size_counts[1] >= 2 and DOUBLE_DEAL_M in deals:
-            selected_deals.append({
-                'Code': DOUBLE_DEAL_M,
-                'Qty': 1,
-            })
-        if size_counts[2] >= 2 and DOUBLE_DEAL_L in deals:
-            selected_deals.append({
-                'Code': DOUBLE_DEAL_L,
-                'Qty': 1,
-            })
-
         return selected_deals
-
-    @staticmethod
-    def _count_pizza(order_list):
-        return len([o for o in order_list if o['CategoryCode'] == 'Pizza'])
-
-    @staticmethod
-    def _count_pizza_sizes(order_list):
-        s, m, l = 0, 0, 0
-
-        for order in order_list:
-            if order['CategoryCode'] == 'Pizza':
-                if 'SizeCode' in order:
-                    if order['SizeCode'] == str(SMALL):
-                        s += 1
-                    if order['SizeCode'] == str(STANDARD):
-                        m += 1
-                    if order['SizeCode'] == str(LARGE):
-                        l += 1
-                else:
-                    if order['Code'].startswith(str(SMALL)):
-                        s += 1
-                    if order['Code'].startswith(str(STANDARD)):
-                        m += 1
-                    if order['Code'].startswith(str(LARGE)):
-                        l += 1
-
-
-        return [s, m, l]
-
-    @staticmethod
-    def _count_cheesy_bread(order_list):
-        return len([o for o in order_list if o['Code'] == CHEESY_BREAD])
 
     def create_order(self, store_id, orders, menu):
         order = {
@@ -216,8 +160,12 @@ class PizzaApi:
         validate_url = self.config['order']['validate']
         validated_order = requests.post(validate_url, json=data, headers=self._get_headers()).json()
 
-        carryout = validated_order['Order']['ServiceMethod'] == 'Carryout'
-        deals = self.optimize_deals(validated_order['Order']['Products'], menu, carryout)
+        deals = self.optimize_deals(
+            validated_order['Order']['Products'],
+            menu,
+            validated_order['Order']['StoreID'],
+            validated_order['Order']['ServiceMethod'],
+        )
 
         validated_order['Order']['Coupons'] = deals
         validated_order_with_deals = requests.post(validate_url, json=validated_order, headers=self._get_headers()).json()
@@ -225,10 +173,6 @@ class PizzaApi:
         price_url = self.config['order']['price']
 
         priced_order = requests.post(price_url, json=validated_order_with_deals, headers=self._get_headers()).json()
-
-        if len([x for x in priced_order['Order']['StatusItems'] if x['Code'] == 'PosOrderIncomplete']) > 0:
-            # TODO remove deals until it parses.
-            pass
 
         return priced_order
 
