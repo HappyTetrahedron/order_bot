@@ -15,6 +15,12 @@ class Default:
             return self.set_service_method(arg, settings)
         if key == 'address':
             return self.set_address(arg, settings)
+        if key == 'name':
+            return self.set_name(arg, settings)
+        if key == 'phone':
+            return self.set_phone(arg, settings)
+        if key == 'email':
+            return self.set_email(arg, settings)
 
     def set_store(self, query, settings):
         return "Uh oh - setting a store does not apply to your current order mode."
@@ -24,3 +30,12 @@ class Default:
 
     def set_address(self, arg, settings):
         return "Uh oh - setting an address does not apply to your current order mode."
+
+    def set_name(self, arg, settings):
+        return "Uh oh - setting a name is irrelevant with your current order mode."
+
+    def set_phone(self, arg, settings):
+        return "Uh oh - setting a name is irrelevant with your current order mode."
+
+    def set_email(self, arg, settings):
+        return "Uh oh - setting a name is irrelevant with your current order mode."

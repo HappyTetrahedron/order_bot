@@ -340,6 +340,12 @@ class PollBot:
                                       self.set_backend_specific_setting('service_method', bot, update)))
         dp.add_handler(CommandHandler("address", lambda bot, update:
                                       self.set_backend_specific_setting('address', bot, update)))
+        dp.add_handler(CommandHandler("name", lambda bot, update:
+                                      self.set_backend_specific_setting('name', bot, update)))
+        dp.add_handler(CommandHandler("phone", lambda bot, update:
+                                      self.set_backend_specific_setting('phone', bot, update)))
+        dp.add_handler(CommandHandler("email", lambda bot, update:
+                                      self.set_backend_specific_setting('email', bot, update)))
 
         # log all errors
         dp.add_error_handler(self.error)

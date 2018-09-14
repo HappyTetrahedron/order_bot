@@ -177,6 +177,21 @@ class Dominos(Default):
                 },
             }
 
+        if 'first_name' in settings:
+            order['FirstName'] = settings['first_name']
+
+        if 'last_name' in settings:
+            order['LastName'] = settings['last_name']
+
+        if 'email' in settings:
+            order['Email'] = settings['email']
+
+        if 'phone' in settings:
+            order['Phone'] = settings['phone']
+
+        if 'phone_prefix' in settings:
+            order['PhonePrefix'] = settings['phone']
+
         for i, item in enumerate(orders):
             if item is not None:
                 item['ID'] = i
@@ -206,9 +221,6 @@ class Dominos(Default):
 
         encoded = json.dumps(validated_order_with_deals, ensure_ascii=False).encode('cp1252')
         priced_order = requests.post(price_url, data=encoded, headers=self._get_headers()).json()
-
-        import pprint
-        pprint.pprint(priced_order)
 
         return priced_order
 
@@ -291,7 +303,7 @@ class Dominos(Default):
             return "I didn't understand that - pick either Carryout or Delivery."
 
     def set_address(self, arg, settings):
-        regex = '(.+)\s+(\S+),\s+(\d{4,5})\s+(.+)'
+        regex = '(.+)\s+(\S+),\s+(\d{4,5})\s+([^,]+)'
 
         matches = re.match(regex, arg)
 
@@ -324,6 +336,43 @@ class Dominos(Default):
             address['city'],
         )
 
+    def set_name(self, name, settings):
+        regex = '(.+)\s+(\S+)'
+
+        matches = re.match(regex, name)
+
+        if not matches:
+            return "Sorry, I could not understand this name. Please use the following format:\n" \
+                   "<firstname> <lastname>"
+
+        settings['first_name'] = capitalize(matches.group(1))
+        settings['last_name'] = capitalize(matches.group(2))
+
+        return "I set your name to {} {}.".format(settings['first_name'], settings['last_name'])
+
+    def set_phone(self, phone, settings):
+        regex = '^\+?0*([1-9]+)[0\s]+([\d\s]{9,18})$'
+
+        matches = re.match(regex, phone)
+
+        if not matches:
+            return "Please enter a valid phone number (with country code).\n" \
+                   "Example: +41 079 123 45 67"
+
+        settings['phone_prefix'] = matches.group(1)
+        settings['phone'] = matches.group(2).replace(' ', '')
+        return "I set your phone number to +{} 0{}".format(settings['phone_prefix'], settings['phone'])
+
+    def set_email(self, email, settings):
+        regex = '^(\S+)@(\S+)\.([a-z]+)$'
+
+        matches = re.match(regex, email)
+
+        if not matches:
+            return "Please enter a valid email address."
+
+        settings['email'] = email
+        return "I set your email address to {}".format(email)
 
     @staticmethod
     def get_customization_string(validated_order, menu):
@@ -444,6 +493,9 @@ class Dominos(Default):
         )
 
         result = requests.get(url).json()
+
+        import pprint
+        pprint.pprint(result)
 
         if len(result['results'][0]['locations']) <= 0:
             raise ValueError('no such location')
