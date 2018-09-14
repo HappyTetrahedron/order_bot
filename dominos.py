@@ -3,6 +3,7 @@ import logging
 import datetime
 from urllib.parse import quote_plus
 from unicodedata import normalize
+from default import Default
 
 logger = logging.getLogger(__name__)
 
@@ -48,9 +49,13 @@ def commonprefix(a, b):
     return a
 
 
-class PizzaApi:
+class Dominos(Default):
     def __init__(self, config):
-        self.config = config
+        Default.__init__(self, config)
+        self.mode_selected_message = "You're using Domino's Pizza Mode. I will try to interpret your orders " \
+                                     "as Domino's Pizza Menu Items, and when you submit it, I will order at " \
+                                     "your configured Domino's Pizza Store."
+        self.short_description = "Order at Domino's Pizza stores in Switzerland"
 
     def get_stores_near(self, query):
         lat, lng = self._get_coordinates(query)
@@ -176,6 +181,67 @@ class PizzaApi:
 
         return priced_order
 
+    def get_orders_as_string(self, collection, orders):
+        dominos_order_string = ""
+        for order in orders:
+            dominos_order_string += "{};".format(order['order_text'].split('\n')[0])
+        text = ""
+        text += "=== Domino's Pizza Order ===\n"
+        if not ('settings' in collection and 'store_id' in collection['settings']):
+            text += "You have not configured a Domino's Pizza store. Please do so using the /store command."
+            return text
+
+        if dominos_order_string.endswith(';'):
+            dominos_order_string = dominos_order_string[:-1]
+        dominos_menu = self.get_menu_from_store(collection['settings']['store_id'])
+        dominos_orders = self.parse_all_orders(dominos_order_string, dominos_menu)
+        validated_orders = self.create_order(collection['settings']['store_id'], dominos_orders, dominos_menu)
+
+        for item in validated_orders['Order']['Coupons']:
+            text += "- {}\n".format(dominos_menu.get_deals()[item['Code']]['Name'].split('-')[0])
+
+        for item in validated_orders['Order']['Products']:
+            if 'AutoRemove' in item and item['AutoRemove']:
+                continue
+            text += "*{}* {} CHF".format(
+                item['Name'] if 'Name' in item else item['Code'],
+                item['Price'] if 'Price' in item else "--"
+            )
+            if 'Options' in item:
+                text += " - "
+                text += self.get_customization_string(item, dominos_menu)
+            text += '\n'
+            if 'StatusItems' in item:
+                for status_item in item['StatusItems']:
+                    text += status_item['Code']
+                    text += " "
+                text += '\n'
+        if 'StatusItems' in validated_orders['Order']:
+            text += '\nDominos reports the following issues with your order:\n'
+            for status_item in validated_orders['Order']['StatusItems']:
+                text += status_item['Code']
+                text += " "
+            text += '\n'
+
+        return text.strip()
+
+    def set_store(self, query, settings):
+        if len(query) <= 0:
+            return "You need to provide an argument for this command. Which store do you " + \
+                                      "want to use? (Provide a location)"
+        store = self.get_closest_store(query)
+
+        if store is None:
+            return "Uh oh, I couldn't find a Domino's store at that location. Try another."
+
+        settings['store_id'] = store['StoreID']
+        return "You will now order at the {} store ({}, {} {})".format(
+            store['StoreName'],
+            store['StreetName'],
+            store['PostalCode'],
+            store['City']
+        )
+
     @staticmethod
     def get_customization_string(validated_order, menu):
         if 'Options' not in validated_order:
@@ -294,7 +360,7 @@ class PizzaApi:
             key=self.config['geocode']['key']
         )
 
-        result = requests.get(url).json();
+        result = requests.get(url).json()
 
         if len(result['results'][0]['locations']) <= 0:
             raise ValueError('no such location')

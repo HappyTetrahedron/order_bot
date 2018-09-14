@@ -10,7 +10,8 @@ import json
 from uuid import uuid4
 from telegram.ext import Updater, CommandHandler
 from mentions_handler import MentionsHandler
-from pizza_api import PizzaApi
+from dominos import Dominos
+from default import Default
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
                     level=logging.INFO)
@@ -33,11 +34,10 @@ class PollBot:
     def __init__(self):
         self.db = None
         self.config = None
-        self.pizza = None
+        self.backends = {}
 
     def start(self, bot, update):
         """Send a message when the command /start is issued."""
-        table = self.db['order_collections']
         defaults = self.db['defaults']
         default_settings = defaults.find_one(chat=update.message.chat.id)
 
@@ -57,18 +57,17 @@ class PollBot:
                                         quote=False)
 
         new_collection['message'] = msg.message_id
-        table.upsert(self.serialize(new_collection), ['chat'])
+        self.store_collection(new_collection)
 
     def mention(self, bot, update):
-        collections = self.db['order_collections']
-        collection = collections.find_one(chat=update.message.chat.id)
+        collection = self.get_collection(update.message.chat.id)
 
         order_text = update.message.text.replace("@{}".format(self.config['bot_name']), "")
         if len(order_text) > 400:
             order_text = order_text[:400] + "..."
         order_text = re.sub(r'\n\s*', "\n", order_text)
         order_text.strip()
-        if collection is not None:
+        if collection is not None and collection['active']:
             orders = self.db['orders']
             new_order = {
                 'collection_uuid': collection['uuid'],
@@ -79,34 +78,50 @@ class PollBot:
             }
             orders.upsert(new_order, ['chat', 'user_id'])
 
-            self.update_order_message(bot, self.deserialize(collection))
+            self.update_order_message(bot, collection)
 
         else:
             update.message.reply_text("Uh oh - there is no ongoing order in this chat. Please /start me first.")
 
-    def set_store(self, bot, update):
+    def delete(self, bot, update):
+        collection = self.get_collection(update.message.chat.id)
+        if not collection:
+            return
+        orders = self.db['orders']
+
+        orders.delete(collection_uuid=collection['uuid'], user_id=update.message.from_user.id)
+
+        self.update_order_message(bot, collection)
+
+    def set_mode(self, bot, update):
         splits = update.message.text.strip().split(' ', 1)
+
+        modes = ""
+        for i in self.backends.keys():
+            modes += "*{}*: {}\n".format(i, self.backends[i].short_description)
+
         if len(splits) <= 1:
-            update.message.reply_text("You need to provide an argument for this command. Which store do you "
-                                      "want to use? (Provide a location)")
+            update.message.reply_text("Please provide an argument for this command. "
+                                      "Available modes are:\n{}".format(modes),
+                                      parse_mode='markdown')
             return
 
-        query = splits[1]
+        arg = splits[1].strip().lower()
 
-        store = self.pizza.get_closest_store(query)
-        if store is None:
-            update.message.reply_text("Uh oh, I couldn't find a Domino's store at that location. Try another.")
+        if arg not in self.backends:
+            update.message.reply_text("Invalid mode. Available modes are:\n{}".format(modes),
+                                      parse_mode='markdown')
             return
 
-        collections = self.db['order_collections']
-        collection = collections.find_one(chat=update.message.chat.id)
+        collection = self.get_collection(update.message.chat.id)
 
         if collection is not None and 'active' in collection and collection['active']:
             collection = self.deserialize(collection)
-            collection['settings']['store_id'] = store['StoreID']
-            collections.update(self.serialize(collection), ['chat'])
+            collection['settings']['mode'] = arg
+            message = self.backends[arg].mode_selected_message
+            self.store_collection(collection)
 
-            reply_string = "I set your ongoing order to be ordered at the {} store ({}, {} {})"
+            reply_string = "I tried to configure your ongoing order.\n{}".format(message)
             self.update_order_message(bot, collection)
         else:  # no ongoing order
             defaults = self.db['defaults']
@@ -117,28 +132,61 @@ class PollBot:
                     'settings': {},
                 }
             else:
-                default_settings = self.deserialize(default_settings)
-            default_settings['settings']['store_id'] = store['StoreID']
+                default_settings = self.deserialize(default_settings['settings'])
+            default_settings['mode'] = arg
+            message = self.backends[arg].mode_selected_message
             defaults.upsert(self.serialize(default_settings), ['chat'])
-            reply_string = "I configured this chat to always order at the {} store ({}, {} {})"
+            reply_string = "I tried to configure the global settings for this chat.\n{}".format(message)
 
-        update.message.reply_text(reply_string.format(
-            store['StoreName'],
-            store['StreetName'],
-            store['PostalCode'],
-            store['City']
-        ))
+        update.message.reply_text(reply_string)
 
-    def delete(self, bot, update):
+    def close_order(self, bot, update):
+        collection = self.get_collection(update.message.chat.id)
+
+        if collection is not None:
+            collection['active'] = False
+            self.store_collection(collection)
+        update.message.reply_text("I closed your ongoing order. You can always /reopen it.")
+
+    def reopen_order(self, bot, update):
+        collection = self.get_collection(update.message.chat.id)
+
+        if collection is not None:
+            collection['active'] = True
+            update.message.reply_text("I reopened your ongoing order. You can now order stuff again.")
+            self.store_collection(collection)
+        else:
+            update.message.reply_text("Uh oh, there is no order in this chat that I could reopen.")
+
+    # Help command handler
+    def send_help(self, bot, update):
+        """Send a message when the command /help is issued."""
+        helptext = "Hey! I'm an order bot. I collect orders from members of your group chat.\n" \
+            "Just add me to a group chat and send me the /start command.\n" \
+            "After that, anyone can send a message to the chat that @mentions me, " \
+            "and I will add the content of that message to my order list.\n\n" \
+            "Example: 'One pizza please @{}'\n\n" \
+            "I support various modes. By default, I merely collect your orders, but I can " \
+            "also order at Domino's Pizza, for example. Check out the /mode command to learn more.\n\n" \
+            "Protip: Pin the message with the orders so you don't lose it.".format(self.config['bot_name'])
+        update.message.reply_text(helptext)
+
+    # Error handler
+    def error(self, bot, update, error):
+        """Log Errors caused by Updates."""
+        logger.warning('Update "%s" caused error "%s"', update, error)
+
+    def get_collection(self, chat_id):
         collections = self.db['order_collections']
-        collection = collections.find_one(chat=update.message.chat.id)
-        if not collection:
-            return
-        orders = self.db['orders']
+        collection = collections.find_one(chat=chat_id)
+        if collection is not None:
+            return self.deserialize(collection)
+        else:
+            return None
 
-        orders.delete(collection_uuid=collection['uuid'], user_id=update.message.from_user.id)
-
-        self.update_order_message(bot, self.deserialize(collection))
+    def store_collection(self, collection):
+        collections = self.db['order_collections']
+        collections.upsert(self.serialize(collection), ['chat'])
 
     def update_order_message(self, bot, collection):
         bot.edit_message_text(
@@ -151,14 +199,13 @@ class PollBot:
     def get_updated_message(self, collection):
         text = "=== Your Orders ==="
         order_text = ""
-        dominos_order_string = ""
 
         table = self.db['orders']
         orders = table.find(collection_uuid=collection['uuid'])
+        orders = list(orders)
 
         for order in orders:
             order_text += "\n*{}*: {}\n".format(order['user_name'], order['order_text'][:403])
-            dominos_order_string += "{};".format(order['order_text'].split('\n')[0])
 
         text += order_text
         text.strip()
@@ -166,64 +213,55 @@ class PollBot:
             text += "\nThere are currently no orders."
             return text
 
-        text += "\n=== My Interpretation ===\n"
-        if not ('settings' in collection and 'store_id' in collection['settings']):
-            text += "You have not configured a Domino's Pizza store. Please do so using the /store command."
-            return text
+        text += "\n"
+        text += self.get_backend(collection).get_orders_as_string(collection, orders)
 
-        if dominos_order_string.endswith(';'):
-            dominos_order_string = dominos_order_string[:-1]
-        dominos_menu = self.pizza.get_menu_from_store(collection['settings']['store_id'])
-        dominos_orders = self.pizza.parse_all_orders(dominos_order_string, dominos_menu)
-        validated_orders = self.pizza.create_order(collection['settings']['store_id'], dominos_orders, dominos_menu)
-
-        for item in validated_orders['Order']['Coupons']:
-            text += "- {}\n".format(dominos_menu.get_deals()[item['Code']]['Name'].split('-')[0])
-
-        for item in validated_orders['Order']['Products']:
-            if 'AutoRemove' in item and item['AutoRemove']:
-                continue
-            text += "*{}* {} CHF".format(
-                item['Name'] if 'Name' in item else item['Code'],
-                item['Price'] if 'Price' in item else "--"
-            )
-            if 'Options' in item:
-                text += " - "
-                text += self.pizza.get_customization_string(item, dominos_menu)
-            text += '\n'
-            if 'StatusItems' in item:
-                for status_item in item['StatusItems']:
-                    text += status_item['Code']
-                    text += " "
-                text += '\n'
-        if 'StatusItems' in validated_orders['Order']:
-            text += '\nDominos reports the following issues with your order:\n'
-            for status_item in validated_orders['Order']['StatusItems']:
-                text += status_item['Code']
-                text += " "
-            text += '\n'
-
-        return text.strip()
+        return text
 
     @staticmethod
     def get_affirmation():
         return random.choice(AFFIRMATIONS)
 
-    # Help command handler
-    def send_help(self, bot, update):
-        """Send a message when the command /help is issued."""
-        helptext = "Hey! I'm an order bot. I collect orders from members of your group chat.\n" \
-            "Just add me to a group chat and send me the /start command.\n" \
-            "After that, anyone can send a message to the chat that @mentions me, " \
-            "and I will add the content of that message to my order list.\n\n" \
-            "Example: 'One pizza please @{}'\n\n" \
-            "Protip: Pin the message with the orders so you don't lose it.".format(self.config['bot_name'])
-        update.message.reply_text(helptext)
+    def get_backend(self, collection):
+        if not ('settings' in collection and 'mode' in collection['settings']):
+            return self.backends['default']
+        elif not collection['settings']['mode'] in self.backends:
+            return self.backends['default']
+        else:
+            return self.backends[collection['settings']['mode']]
 
-    # Error handler
-    def error(self, bot, update, error):
-        """Log Errors caused by Updates."""
-        logger.warning('Update "%s" caused error "%s"', update, error)
+    def set_store(self, bot, update):
+        splits = update.message.text.strip().split(' ', 1)
+        if len(splits) <= 1:
+            query = ""
+        else:
+            query = splits[1]
+
+        collections = self.db['order_collections']
+        collection = collections.find_one(chat=update.message.chat.id)
+
+        if collection is not None and 'active' in collection and collection['active']:
+            collection = self.deserialize(collection)
+            message = self.get_backend(collection).set_store(query, collection['settings'])
+            collections.update(self.serialize(collection), ['chat'])
+
+            reply_string = "I tried to configure your ongoing order.\n{}".format(message)
+            self.update_order_message(bot, collection)
+        else:  # no ongoing order
+            defaults = self.db['defaults']
+            default_settings = defaults.find_one(chat=update.message.chat.id)
+            if default_settings is None:
+                default_settings = {
+                    'chat': update.message.chat.id,
+                    'settings': {},
+                }
+            else:
+                default_settings = self.deserialize(default_settings)
+            message = self.get_backend(default_settings).set_store(query, default_settings['settings'])
+            defaults.upsert(self.serialize(default_settings), ['chat'])
+            reply_string = "I tried to configure the global settings for this chat.\n{}".format(message)
+
+        update.message.reply_text(reply_string)
 
     @staticmethod
     def serialize(item):
@@ -247,7 +285,8 @@ class PollBot:
 
         self.db = dataset.connect('sqlite:///{}'.format(self.config['db']))
 
-        self.pizza = PizzaApi(self.config['pizza'])
+        self.backends['dominos'] = Dominos(self.config['dominos'])
+        self.backends['default'] = Default(None)
 
         # Create the EventHandler and pass it your bot's token.
         updater = Updater(self.config['token'])
@@ -255,10 +294,20 @@ class PollBot:
         # Get the dispatcher to register handlers
         dp = updater.dispatcher
 
+        # General commands
         dp.add_handler(MentionsHandler(self.config['bot_name'], self.mention))
         dp.add_handler(CommandHandler("help", self.send_help))
         dp.add_handler(CommandHandler("start", self.start))
+
+        # Order commands
         dp.add_handler(CommandHandler("delete", self.delete))
+
+        # Collection commands
+        dp.add_handler(CommandHandler("close", self.close_order))
+        dp.add_handler(CommandHandler("reopen", self.reopen_order))
+
+        # Configuration commands
+        dp.add_handler(CommandHandler("mode", self.set_mode))
         dp.add_handler(CommandHandler("store", self.set_store))
 
         # log all errors
