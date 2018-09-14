@@ -8,6 +8,8 @@ import re
 import json
 
 from uuid import uuid4
+
+from telegram import TelegramError
 from telegram.ext import Updater, CommandHandler
 from mentions_handler import MentionsHandler
 from dominos import Dominos
@@ -94,51 +96,53 @@ class PollBot:
         self.update_order_message(bot, collection)
 
     def set_mode(self, bot, update):
-        splits = update.message.text.strip().split(' ', 1)
+        arg = self.get_command_arg(update.message.text)
 
         modes = ""
         for i in self.backends.keys():
             modes += "*{}*: {}\n".format(i, self.backends[i].short_description)
 
-        if len(splits) <= 1:
+        if not arg:
             update.message.reply_text("Please provide an argument for this command. "
                                       "Available modes are:\n{}".format(modes),
                                       parse_mode='markdown')
             return
-
-        arg = splits[1].strip().lower()
 
         if arg not in self.backends:
             update.message.reply_text("Invalid mode. Available modes are:\n{}".format(modes),
                                       parse_mode='markdown')
             return
 
-        collection = self.get_collection(update.message.chat.id)
+        def setter(settings):
+            settings['mode'] = arg
+            return self.backends[arg].mode_selected_message
 
-        if collection is not None and 'active' in collection and collection['active']:
-            collection = self.deserialize(collection)
-            collection['settings']['mode'] = arg
-            message = self.backends[arg].mode_selected_message
-            self.store_collection(collection)
-
-            reply_string = "I tried to configure your ongoing order.\n{}".format(message)
-            self.update_order_message(bot, collection)
-        else:  # no ongoing order
-            defaults = self.db['defaults']
-            default_settings = defaults.find_one(chat=update.message.chat.id)
-            if default_settings is None:
-                default_settings = {
-                    'chat': update.message.chat.id,
-                    'settings': {},
-                }
-            else:
-                default_settings = self.deserialize(default_settings['settings'])
-            default_settings['mode'] = arg
-            message = self.backends[arg].mode_selected_message
-            defaults.upsert(self.serialize(default_settings), ['chat'])
-            reply_string = "I tried to configure the global settings for this chat.\n{}".format(message)
-
+        reply_string = self.configure_settings(bot, update.message.chat.id, setter)
         update.message.reply_text(reply_string)
+
+    def set_backend_specific_setting(self, setting_key, bot, update):
+        query = self.get_command_arg(update.message.text)
+
+        settings, _ = self.get_settings(update.message.chat.id)
+
+        def setter(_settings):
+            return self.get_backend_from_settings(settings).set(setting_key, query, _settings)
+
+        reply_string = self.configure_settings(bot, update.message.chat.id, setter)
+        update.message.reply_text(reply_string)
+
+    def print_settings(self, bot, update):
+        settings, is_global = self.get_settings(update.message.chat.id)
+        if is_global:
+            msg = "Global settings:\n"
+        else:
+            msg = "Collection settings:\n"
+        if not settings:
+            update.message.reply_text("This chat has no settings configured.")
+        else:
+            for k, v in settings.items():
+                msg += "{}: {}\n".format(k, v)
+            update.message.reply_text(msg)
 
     def close_order(self, bot, update):
         collection = self.get_collection(update.message.chat.id)
@@ -175,6 +179,45 @@ class PollBot:
     def error(self, bot, update, error):
         """Log Errors caused by Updates."""
         logger.warning('Update "%s" caused error "%s"', update, error)
+
+    def configure_settings(self, bot, chat_id, setter_func):
+        collection = self.get_collection(chat_id)
+        if collection is not None and 'active' in collection and collection['active']:
+            message = setter_func(collection['settings'])
+            self.store_collection(collection)
+            reply_string = "I tried to configure your ongoing order.\n{}".format(message)
+            try:
+                self.update_order_message(bot, collection)
+            except TelegramError as e:
+                logger.warning(e)
+
+        else:
+            defaults = self.db['defaults']
+            default_settings = defaults.find_one(chat=chat_id)
+            if default_settings is None:
+                default_settings = {
+                    'chat': chat_id,
+                    'settings': {},
+                }
+            else:
+                default_settings = self.deserialize(default_settings)
+            message = setter_func(default_settings['settings'])
+            defaults.upsert(self.serialize(default_settings), ['chat'])
+            reply_string = "I tried to configure the global settings for this chat.\n{}".format(message)
+        return reply_string
+
+    def get_settings(self, chat_id):
+        collection = self.get_collection(chat_id)
+        if collection is not None and 'active' in collection and collection['active']:
+            return collection['settings'], False
+        else:
+            defaults = self.db['defaults']
+            default_settings = defaults.find_one(chat=chat_id)
+            if default_settings is None:
+                return {}, True
+            else:
+                default_settings = self.deserialize(default_settings)
+                return default_settings['settings'], True
 
     def get_collection(self, chat_id):
         collections = self.db['order_collections']
@@ -223,45 +266,17 @@ class PollBot:
         return random.choice(AFFIRMATIONS)
 
     def get_backend(self, collection):
-        if not ('settings' in collection and 'mode' in collection['settings']):
+        if 'settings' not in collection:
             return self.backends['default']
-        elif not collection['settings']['mode'] in self.backends:
+        return self.get_backend_from_settings(collection['settings'])
+
+    def get_backend_from_settings(self, settings):
+        if 'mode' not in settings:
+            return self.backends['default']
+        elif not settings['mode'] in self.backends:
             return self.backends['default']
         else:
-            return self.backends[collection['settings']['mode']]
-
-    def set_store(self, bot, update):
-        splits = update.message.text.strip().split(' ', 1)
-        if len(splits) <= 1:
-            query = ""
-        else:
-            query = splits[1]
-
-        collections = self.db['order_collections']
-        collection = collections.find_one(chat=update.message.chat.id)
-
-        if collection is not None and 'active' in collection and collection['active']:
-            collection = self.deserialize(collection)
-            message = self.get_backend(collection).set_store(query, collection['settings'])
-            collections.update(self.serialize(collection), ['chat'])
-
-            reply_string = "I tried to configure your ongoing order.\n{}".format(message)
-            self.update_order_message(bot, collection)
-        else:  # no ongoing order
-            defaults = self.db['defaults']
-            default_settings = defaults.find_one(chat=update.message.chat.id)
-            if default_settings is None:
-                default_settings = {
-                    'chat': update.message.chat.id,
-                    'settings': {},
-                }
-            else:
-                default_settings = self.deserialize(default_settings)
-            message = self.get_backend(default_settings).set_store(query, default_settings['settings'])
-            defaults.upsert(self.serialize(default_settings), ['chat'])
-            reply_string = "I tried to configure the global settings for this chat.\n{}".format(message)
-
-        update.message.reply_text(reply_string)
+            return self.backends[settings['mode']]
 
     @staticmethod
     def serialize(item):
@@ -278,6 +293,14 @@ class PollBot:
         else:
             item['settings'] = {}
         return item
+
+    @staticmethod
+    def get_command_arg(command):
+        splits = command.strip().split(' ', 1)
+        if len(splits) <= 1:
+            return ""
+        else:
+            return splits[1].strip().lower()
 
     def run(self, opts):
         with open(opts.config, 'r') as configfile:
@@ -307,8 +330,16 @@ class PollBot:
         dp.add_handler(CommandHandler("reopen", self.reopen_order))
 
         # Configuration commands
+        dp.add_handler(CommandHandler("settings", self.print_settings))
         dp.add_handler(CommandHandler("mode", self.set_mode))
-        dp.add_handler(CommandHandler("store", self.set_store))
+
+        # Backend specific configuration
+        dp.add_handler(CommandHandler("store", lambda bot, update:
+                                      self.set_backend_specific_setting('store', bot, update)))
+        dp.add_handler(CommandHandler("servicemethod", lambda bot, update:
+                                      self.set_backend_specific_setting('service_method', bot, update)))
+        dp.add_handler(CommandHandler("address", lambda bot, update:
+                                      self.set_backend_specific_setting('address', bot, update)))
 
         # log all errors
         dp.add_error_handler(self.error)

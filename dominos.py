@@ -1,6 +1,8 @@
 import requests
 import logging
 import datetime
+import json
+import re
 from urllib.parse import quote_plus
 from unicodedata import normalize
 from default import Default
@@ -32,6 +34,7 @@ STANDARD, SMALL, LARGE = 30, 25, 35
 PIZZA_CODE_PREFIX = 'HT'  # H = standard crust. Dunno what the T stands for but it's the only option.
 
 DEALS = [
+    'N044',  # Crazy Tuesday
     'N054',  # Crazy Weekday
     'L097',  # Take 3 Away
     'N050',  # Double Deal S
@@ -47,6 +50,10 @@ def commonprefix(a, b):
         if c != b[i]:
             return a[:i]
     return a
+
+
+def capitalize(s):
+    return " ".join(w.capitalize() for w in s.split())
 
 
 class Dominos(Default):
@@ -102,7 +109,11 @@ class Dominos(Default):
             if 'Tags' in deals[deal_id] and 'Days' in deals[deal_id]['Tags']:
                 today = datetime.date.today()
                 weekday = today.strftime('%a')
-                if not any([weekday.startswith(day) for day in deals[deal_id]['Tags']['Days']]):
+                available_days = deals[deal_id]['Tags']['Days']
+                if not (
+                    isinstance(available_days, str) and weekday.startswith(available_days)
+                    or any([weekday.startswith(day) for day in available_days])
+                ):
                     continue
             # Is the deal available for this service method?
             if service_method != deals[deal_id]['Tags']['ValidServiceMethods'] \
@@ -143,14 +154,28 @@ class Dominos(Default):
 
         return selected_deals
 
-    def create_order(self, store_id, orders, menu):
+    def create_order(self, orders, menu, settings):
+        store_id = settings['store_id'] if 'store_id' in settings else 'wat'
+        service_method = settings['service_method'] if 'service_method' in settings else 'Delivery'
         order = {
-            'ServiceMethod': 'Carryout',
+            'ServiceMethod': service_method,
             'SourceOrganizationURI': self.config['sourceURI'],
             'LanguageCode': self.config['language'],
             'StoreID': store_id,
             'Products': []
         }
+
+        if 'address' in settings:
+            order['Address'] = {
+                'City': settings['address']['city'],
+                'PostalCode': settings['address']['zip'],
+                'StreetName': settings['address']['street'],
+                'StreetNumber': settings['address']['street_no'],
+                'Coordinates': {
+                    'Latitude': settings['address']['coords']['lat'],
+                    'Longitude': settings['address']['coords']['lng'],
+                },
+            }
 
         for i, item in enumerate(orders):
             if item is not None:
@@ -163,7 +188,8 @@ class Dominos(Default):
         }
 
         validate_url = self.config['order']['validate']
-        validated_order = requests.post(validate_url, json=data, headers=self._get_headers()).json()
+        encoded = json.dumps(data, ensure_ascii=False).encode('cp1252')
+        validated_order = requests.post(validate_url, data=encoded, headers=self._get_headers()).json()
 
         deals = self.optimize_deals(
             validated_order['Order']['Products'],
@@ -173,11 +199,16 @@ class Dominos(Default):
         )
 
         validated_order['Order']['Coupons'] = deals
-        validated_order_with_deals = requests.post(validate_url, json=validated_order, headers=self._get_headers()).json()
+        encoded = json.dumps(validated_order, ensure_ascii=False).encode('cp1252')
+        validated_order_with_deals = requests.post(validate_url, data=encoded, headers=self._get_headers()).json()
 
         price_url = self.config['order']['price']
 
-        priced_order = requests.post(price_url, json=validated_order_with_deals, headers=self._get_headers()).json()
+        encoded = json.dumps(validated_order_with_deals, ensure_ascii=False).encode('cp1252')
+        priced_order = requests.post(price_url, data=encoded, headers=self._get_headers()).json()
+
+        import pprint
+        pprint.pprint(priced_order)
 
         return priced_order
 
@@ -195,7 +226,9 @@ class Dominos(Default):
             dominos_order_string = dominos_order_string[:-1]
         dominos_menu = self.get_menu_from_store(collection['settings']['store_id'])
         dominos_orders = self.parse_all_orders(dominos_order_string, dominos_menu)
-        validated_orders = self.create_order(collection['settings']['store_id'], dominos_orders, dominos_menu)
+        validated_orders = self.create_order(dominos_orders, dominos_menu, collection['settings'])
+
+        currency = validated_orders['Order']['Currency']
 
         for item in validated_orders['Order']['Coupons']:
             text += "- {}\n".format(dominos_menu.get_deals()[item['Code']]['Name'].split('-')[0])
@@ -203,9 +236,10 @@ class Dominos(Default):
         for item in validated_orders['Order']['Products']:
             if 'AutoRemove' in item and item['AutoRemove']:
                 continue
-            text += "*{}* {} CHF".format(
+            text += "*{}* {} {}".format(
                 item['Name'] if 'Name' in item else item['Code'],
-                item['Price'] if 'Price' in item else "--"
+                item['Price'] if 'Price' in item else "--",
+                currency
             )
             if 'Options' in item:
                 text += " - "
@@ -216,12 +250,16 @@ class Dominos(Default):
                     text += status_item['Code']
                     text += " "
                 text += '\n'
+
+        if 'Amounts' in validated_orders['Order']:
+            text += "*Total*: {} {}\n".format(validated_orders['Order']['Amounts']['Customer'], currency)
         if 'StatusItems' in validated_orders['Order']:
             text += '\nDominos reports the following issues with your order:\n'
             for status_item in validated_orders['Order']['StatusItems']:
                 text += status_item['Code']
                 text += " "
             text += '\n'
+            logger.warning(validated_orders['Order']['StatusItems'])
 
         return text.strip()
 
@@ -241,6 +279,51 @@ class Dominos(Default):
             store['PostalCode'],
             store['City']
         )
+
+    def set_service_method(self, arg, settings):
+        if arg == 'carryout' or arg == 'pickup' or arg == 'carry-out':
+            settings['service_method'] = 'Carryout'
+            return "We set your service method to Carry-out."
+        elif arg == 'delivery':
+            settings['service_method'] = 'Delivery'
+            return "We set your service method to Delivery."
+        else:
+            return "I didn't understand that - pick either Carryout or Delivery."
+
+    def set_address(self, arg, settings):
+        regex = '(.+)\s+(\S+),\s+(\d{4,5})\s+(.+)'
+
+        matches = re.match(regex, arg)
+
+        if not matches:
+            return "Sorry, I could not understand this address. Please use the following format:\n" \
+                   "<street> <number>, <zip> <city>"
+
+        address = {
+            'street': capitalize(matches.group(1)),
+            'street_no': capitalize(matches.group(2)),
+            'zip': capitalize(matches.group(3)),
+            'city': capitalize(matches.group(4))
+        }
+
+        try:
+            lat, lng = self._get_coordinates(arg)
+        except ValueError:
+            return "Sorry, I could not find this address. Did you misspell it?"
+
+        address['coords'] = {
+            'lat': lat,
+            'lng': lng,
+        }
+
+        settings['address'] = address
+        return "I set your delivery address to {} {} in {} {}".format(
+            address['street'],
+            address['street_no'],
+            address['zip'],
+            address['city'],
+        )
+
 
     @staticmethod
     def get_customization_string(validated_order, menu):
