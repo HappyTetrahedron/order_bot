@@ -8,6 +8,13 @@ class Default:
     def get_orders_as_string(self, collection, orders):
         return ""
 
+    def get_confirmation_message(self, collection, orders):
+        return "Uh oh - your selected mode does not support ordering. Either" \
+               " select a different mode, or use the /close command instead.", "", True
+
+    def place_order(self, collection, orders, data):
+        return "Ordering is not supported", True
+
     def set(self, key, arg, settings):
         if key == 'store':
             return self.set_store(arg, settings)
@@ -21,6 +28,8 @@ class Default:
             return self.set_phone(arg, settings)
         if key == 'email':
             return self.set_email(arg, settings)
+        if key == 'time':
+            return self.set_time(arg, settings)
 
     def set_store(self, query, settings):
         return "Uh oh - setting a store does not apply to your current order mode."
@@ -39,3 +48,6 @@ class Default:
 
     def set_email(self, arg, settings):
         return "Uh oh - setting a name is irrelevant with your current order mode."
+
+    def set_time(self, arg, settings):
+        return "Uh oh - setting a time is irrelevant with your current order mode."

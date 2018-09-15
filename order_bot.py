@@ -9,8 +9,8 @@ import json
 
 from uuid import uuid4
 
-from telegram import TelegramError
-from telegram.ext import Updater, CommandHandler
+from telegram import TelegramError, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Updater, CommandHandler, InlineQueryHandler, CallbackQueryHandler
 from mentions_handler import MentionsHandler
 from dominos import Dominos
 from default import Default
@@ -84,6 +84,44 @@ class PollBot:
 
         else:
             update.message.reply_text("Uh oh - there is no ongoing order in this chat. Please /start me first.")
+
+    def button(self, bot, update):
+        query = update.callback_query
+        if query.data == 'cancel':
+            bot.edit_message_text(
+                text="Alright, I cancelled the order. You can keep making changes and try again, or /close it.",
+                message_id=query.message.message_id,
+                chat_id=query.message.chat.id
+            )
+
+        elif query.data == 'confirm':
+            collection = self.get_collection(query.message.chat.id)
+            if 'data' not in collection:
+                # uhm?
+                bot.edit_message_text(
+                    text="There was an error of sorts, it seems... Please just try again.",
+                    message_id=query.message.message_id,
+                    chat_id=query.message.chat.id
+                )
+                return
+
+            data = json.loads(collection['data'])
+
+            table = self.db['orders']
+            orders = table.find(collection_uuid=collection['uuid'])
+            orders = list(orders)
+
+            message, error = self.get_backend(collection).place_order(collection, orders, data)
+
+            bot.edit_message_text(
+                text=message,
+                message_id=query.message.message_id,
+                chat_id=query.message.chat.id
+            )
+
+            if not error:
+                collection['active'] = False
+                self.store_collection(collection)
 
     def delete(self, bot, update):
         collection = self.get_collection(update.message.chat.id)
@@ -161,6 +199,39 @@ class PollBot:
             self.store_collection(collection)
         else:
             update.message.reply_text("Uh oh, there is no order in this chat that I could reopen.")
+
+    def place_order(self, bot, update):
+        collection = self.get_collection(update.message.chat.id)
+        if collection is None \
+                or 'active' not in collection \
+                or not collection['active']:
+            update.message.reply_text("Uh oh, looks like there is no ongoing order in this chat."
+                                      "Please /start me first.")
+            return
+
+        table = self.db['orders']
+        orders = table.find(collection_uuid=collection['uuid'])
+        orders = list(orders)
+
+        message, data, error = self.get_backend(collection).get_confirmation_message(collection, orders)
+
+        if error:
+            update.message.reply_text(message)
+            return
+
+        data_string = json.dumps(data, separators=(',', ':'))
+
+        collection['data'] = data_string
+        self.store_collection(collection)
+
+        inline_keyboard_items = [
+            [InlineKeyboardButton("Confirm", callback_data="confirm")],
+            [InlineKeyboardButton("Cancel", callback_data="cancel")],
+        ]
+        inline_keyboard = InlineKeyboardMarkup(inline_keyboard_items)
+        update.message.reply_text(message, reply_markup=inline_keyboard, parse_mode='markdown')
+
+
 
     # Help command handler
     def send_help(self, bot, update):
@@ -328,6 +399,7 @@ class PollBot:
         # Collection commands
         dp.add_handler(CommandHandler("close", self.close_order))
         dp.add_handler(CommandHandler("reopen", self.reopen_order))
+        dp.add_handler(CommandHandler("order", self.place_order))
 
         # Configuration commands
         dp.add_handler(CommandHandler("settings", self.print_settings))
@@ -338,6 +410,8 @@ class PollBot:
                                       self.set_backend_specific_setting('store', bot, update)))
         dp.add_handler(CommandHandler("servicemethod", lambda bot, update:
                                       self.set_backend_specific_setting('service_method', bot, update)))
+        dp.add_handler(CommandHandler("method", lambda bot, update:
+                                      self.set_backend_specific_setting('service_method', bot, update)))
         dp.add_handler(CommandHandler("address", lambda bot, update:
                                       self.set_backend_specific_setting('address', bot, update)))
         dp.add_handler(CommandHandler("name", lambda bot, update:
@@ -346,6 +420,10 @@ class PollBot:
                                       self.set_backend_specific_setting('phone', bot, update)))
         dp.add_handler(CommandHandler("email", lambda bot, update:
                                       self.set_backend_specific_setting('email', bot, update)))
+        dp.add_handler(CommandHandler("time", lambda bot, update:
+                                      self.set_backend_specific_setting('time', bot, update)))
+
+        dp.add_handler(CallbackQueryHandler(self.button))
 
         # log all errors
         dp.add_error_handler(self.error)

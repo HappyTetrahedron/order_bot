@@ -1,3 +1,5 @@
+import time
+
 import requests
 import logging
 import datetime
@@ -81,6 +83,12 @@ class Dominos(Default):
         if len(stores) == 0:
             return None
         return stores[0]
+
+    def get_store_info(self, store_id):
+        url = self.config['store']['info'].format(
+            storeID=store_id
+        )
+        return requests.get(url, headers=self._get_headers(add_response_type=True)).json()
 
     def get_menu_from_store(self, store_id):
         url = self.config['store']['menu'].format(
@@ -192,6 +200,11 @@ class Dominos(Default):
         if 'phone_prefix' in settings:
             order['PhonePrefix'] = settings['phone']
 
+        if 'time' in settings:
+            today = datetime.date.today()
+            date = today.strftime('%Y-%m-%d ')
+            order['FutureOrderTime'] = date + settings['time'] + ":00"
+
         for i, item in enumerate(orders):
             if item is not None:
                 item['ID'] = i
@@ -222,58 +235,140 @@ class Dominos(Default):
         encoded = json.dumps(validated_order_with_deals, ensure_ascii=False).encode('cp1252')
         priced_order = requests.post(price_url, data=encoded, headers=self._get_headers()).json()
 
+        if self.config['debug']:
+            import pprint
+            pprint.pprint(priced_order)
+
         return priced_order
 
     def get_orders_as_string(self, collection, orders):
-        dominos_order_string = ""
-        for order in orders:
-            dominos_order_string += "{};".format(order['order_text'].split('\n')[0])
-        text = ""
-        text += "=== Domino's Pizza Order ===\n"
+        text = "=== Domino's Pizza Order ===\n"
         if not ('settings' in collection and 'store_id' in collection['settings']):
             text += "You have not configured a Domino's Pizza store. Please do so using the /store command."
             return text
 
-        if dominos_order_string.endswith(';'):
-            dominos_order_string = dominos_order_string[:-1]
-        dominos_menu = self.get_menu_from_store(collection['settings']['store_id'])
-        dominos_orders = self.parse_all_orders(dominos_order_string, dominos_menu)
-        validated_orders = self.create_order(dominos_orders, dominos_menu, collection['settings'])
+        validated_orders, menu = self.order_list_to_validated(collection, orders)
 
-        currency = validated_orders['Order']['Currency']
-
-        for item in validated_orders['Order']['Coupons']:
-            text += "- {}\n".format(dominos_menu.get_deals()[item['Code']]['Name'].split('-')[0])
-
-        for item in validated_orders['Order']['Products']:
-            if 'AutoRemove' in item and item['AutoRemove']:
-                continue
-            text += "*{}* {} {}".format(
-                item['Name'] if 'Name' in item else item['Code'],
-                item['Price'] if 'Price' in item else "--",
-                currency
-            )
-            if 'Options' in item:
-                text += " - "
-                text += self.get_customization_string(item, dominos_menu)
-            text += '\n'
-            if 'StatusItems' in item:
-                for status_item in item['StatusItems']:
-                    text += status_item['Code']
-                    text += " "
-                text += '\n'
-
-        if 'Amounts' in validated_orders['Order']:
-            text += "*Total*: {} {}\n".format(validated_orders['Order']['Amounts']['Customer'], currency)
-        if 'StatusItems' in validated_orders['Order']:
-            text += '\nDominos reports the following issues with your order:\n'
-            for status_item in validated_orders['Order']['StatusItems']:
-                text += status_item['Code']
-                text += " "
-            text += '\n'
-            logger.warning(validated_orders['Order']['StatusItems'])
+        text += self._orders_to_text(validated_orders, menu)
 
         return text.strip()
+
+    def get_confirmation_message(self, collection, orders):
+        text = ""
+        if not ('settings' in collection and 'store_id' in collection['settings']):
+            text += "You have not configured a Domino's Pizza store. Please do so using the /store command."
+            return text, "", True
+
+        validated_orders, menu = self.order_list_to_validated(collection, orders)
+
+        if validated_orders['Status'] != 0:
+            text += "There are some issues with your order:\n"
+            text += self.extract_error_message(validated_orders)
+            text += "Please fix them first and then try again."
+            return text, "", True
+
+        text += "You wish to order the following:\n"
+        text += self._orders_to_text(validated_orders, menu)
+
+        store_info = self.get_store_info(collection['settings']['store_id'])
+
+        text += "\n\nYou will order at the {} store at {} in {}\n".format(
+            store_info['StoreName'].strip(),
+            store_info['StreetName'].strip(),
+            store_info['City'].strip(),
+        )
+
+        settings = collection['settings']
+
+        service_method = settings['service_method'] if 'service_method' in settings else 'Delivery'
+
+        if 'first_name' in settings:
+            text += "Name: {} {}\n".format(settings['first_name'], settings['last_name'])
+
+        if 'email' in settings:
+            text += "E-mail: {}\n".format(settings['email'])
+
+        if 'phone' in settings:
+            text += "Phone: +{} 0{}\n".format(settings['phone_prefix'], settings['phone'])
+
+        if 'time' in settings:
+            today = datetime.date.today()
+            date = today.strftime('%Y-%m-%d ')
+            text += "Order time: {}\n".format(date + settings['time'])
+
+        if 'first_name' in settings:
+            text += "Name: {} {}\n".format(settings['first_name'], settings['last_name'])
+
+        text += 'Service method: {}\n'.format(service_method)
+
+        if service_method == 'Delivery' and 'address' in settings:
+            text += "Delivery address: {} {}, {} {}\n".format(
+                settings['address']['street'],
+                settings['address']['street_no'],
+                settings['address']['zip'],
+                settings['address']['city'],
+            )
+            text += "http://www.google.com/maps/place/{},{}".format(
+                settings['address']['coords']['lat'],
+                settings['address']['coords']['lng'],
+            )
+
+        return text, validated_orders, False
+
+    def place_order(self, collection, orders, data):
+        return "Blerp", False
+
+    @staticmethod
+    def extract_error_message(order):
+        message = ""
+
+        def format_status_item(status_item):
+            if 'PulseText' in item:
+                return "{}: {}\n".format(
+                    item['Code'],
+                    item['PulseText']
+                )
+            if 'Message' in item:
+                return "{}: {}\n".format(
+                    item['Code'],
+                    item['Message']
+                )
+            else:
+                return "{}\n".format(item['Code'])
+
+        if order['Status'] != 0:
+            if 'StatusItems' in order['Order']:
+                for item in order['Order']['StatusItems']:
+                    message += format_status_item(item)
+
+        for item in order['Order']['Products']:
+            if item['Status'] != 0:
+                if 'StatusItems' in item:
+                    message += "Errors with {}:\n".format(item['Name'] if 'Name' in item else item['Code'])
+                    for status in item['StatusItems']:
+                        message += format_status_item(status)
+
+        for item in order['Order']['Coupons']:
+            if item['Status'] != 0:
+                if 'StatusItems' in item:
+                    message += "Errors with deal {}:\n".format(item['Code'])
+                    for status in item['StatusItems']:
+                        message += format_status_item(status)
+
+        return message
+
+    def order_list_to_validated(self, collection, orders):
+        order_string = ""
+        for order in orders:
+            order_string += "{};".format(order['order_text'].split('\n')[0])
+        if order_string.endswith(";"):
+            order_string = order_string[:-1]
+
+        menu = self.get_menu_from_store(collection['settings']['store_id'])
+
+        orders = self.parse_all_orders(order_string, menu)
+        validated = self.create_order(orders, menu, collection['settings'])
+        return validated, menu
 
     def set_store(self, query, settings):
         if len(query) <= 0:
@@ -334,6 +429,17 @@ class Dominos(Default):
             address['street_no'],
             address['zip'],
             address['city'],
+        )
+
+    def set_time(self, arg, settings):
+        try:
+            t = time.strptime(arg, "%H:%M")
+        except ValueError:
+            return "Sorry, I didn't understand that. Please specify a time in the 24-hour format, hh:mm"
+
+        settings['time'] = arg
+        return "I set your order time to {} (on the same day as you place your order)".format(
+            time.strftime("%H:%M", t)
         )
 
     def set_name(self, name, settings):
@@ -441,6 +547,43 @@ class Dominos(Default):
                 else:
                     dominos_order['Options'][match['product']['Code']] = 0
         return dominos_order
+
+    def _orders_to_text(self, validated_orders, dominos_menu):
+        text = ""
+        currency = validated_orders['Order']['Currency']
+
+        for item in validated_orders['Order']['Coupons']:
+            text += "- {}\n".format(dominos_menu.get_deals()[item['Code']]['Name'].split('-')[0])
+
+        for item in validated_orders['Order']['Products']:
+            if 'AutoRemove' in item and item['AutoRemove']:
+                continue
+            text += "*{}* {} {}".format(
+                item['Name'] if 'Name' in item else item['Code'],
+                item['Price'] if 'Price' in item else "--",
+                currency
+            )
+            if 'Options' in item:
+                text += " - "
+                text += self.get_customization_string(item, dominos_menu)
+            text += '\n'
+            if 'StatusItems' in item:
+                for status_item in item['StatusItems']:
+                    text += status_item['Code']
+                    text += " "
+                text += '\n'
+
+        if 'Amounts' in validated_orders['Order']:
+            text += "*Total*: {} {}\n".format(validated_orders['Order']['Amounts']['Customer'], currency)
+        if 'StatusItems' in validated_orders['Order']:
+            text += '\nDominos reports the following issues with your order:\n'
+            for status_item in validated_orders['Order']['StatusItems']:
+                text += status_item['Code']
+                text += " "
+            text += '\n'
+            logger.warning(validated_orders['Order']['StatusItems'])
+
+        return text.strip()
 
     @staticmethod
     def _get_default_toppings(product):
