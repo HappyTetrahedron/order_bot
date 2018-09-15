@@ -637,9 +637,6 @@ class Dominos(Default):
 
         result = requests.get(url).json()
 
-        import pprint
-        pprint.pprint(result)
-
         if len(result['results'][0]['locations']) <= 0:
             raise ValueError('no such location')
 
