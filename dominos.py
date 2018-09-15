@@ -1,5 +1,4 @@
 import time
-
 import requests
 import logging
 import datetime
@@ -323,18 +322,18 @@ class Dominos(Default):
         message = ""
 
         def format_status_item(status_item):
-            if 'PulseText' in item:
+            if 'PulseText' in status_item:
                 return "{}: {}\n".format(
-                    item['Code'],
-                    item['PulseText']
+                    status_item['Code'],
+                    status_item['PulseText']
                 )
-            if 'Message' in item:
+            if 'Message' in status_item:
                 return "{}: {}\n".format(
-                    item['Code'],
-                    item['Message']
+                    status_item['Code'],
+                    status_item['Message']
                 )
             else:
-                return "{}\n".format(item['Code'])
+                return "{}\n".format(status_item['Code'])
 
         if order['Status'] != 0:
             if 'StatusItems' in order['Order']:

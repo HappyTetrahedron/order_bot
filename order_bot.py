@@ -10,7 +10,7 @@ import json
 from uuid import uuid4
 
 from telegram import TelegramError, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Updater, CommandHandler, InlineQueryHandler, CallbackQueryHandler
+from telegram.ext import Updater, CommandHandler, CallbackQueryHandler
 from mentions_handler import MentionsHandler
 from dominos import Dominos
 from default import Default
@@ -230,8 +230,6 @@ class PollBot:
         ]
         inline_keyboard = InlineKeyboardMarkup(inline_keyboard_items)
         update.message.reply_text(message, reply_markup=inline_keyboard, parse_mode='markdown')
-
-
 
     # Help command handler
     def send_help(self, bot, update):
