@@ -169,7 +169,9 @@ class Dominos(Default):
             'SourceOrganizationURI': self.config['sourceURI'],
             'LanguageCode': self.config['language'],
             'StoreID': store_id,
-            'Products': []
+            'Products': [],
+            'OrderChannel': 'OLO',
+            'OrderMethod': 'Web',
         }
 
         if 'address' in settings:
@@ -279,6 +281,70 @@ class Dominos(Default):
 
         settings = collection['settings']
 
+        text += self.settings_to_string(settings)
+
+        text += "\nNote that, by clicking 'confirm', you automatically accept " \
+                "the Domino's Pizza Terms and Conditions and Privacy Policy. " \
+                "Check their website to view them."
+
+        return text, validated_orders, False
+
+    def place_order(self, collection, orders, data):
+        data['Order']['NewUser'] = False
+        data['Order']['Payments'] = [{
+            'Amount': data['Order']['Amounts']['Customer'],
+            'CardType': '',
+            'Expiration': '',
+            'Number': '',
+            'OTP': '',
+            'PostalCode': '',
+            'ProviderID': '',
+            'SecurityCode': '',
+            'gpmPaymentType': '',
+            'Type': 'Cash',
+        }]
+        data['Order']['metaData'] = {
+            'EmailOptIn': False,
+            'SmsOptIn': False,
+            'TCandPPConsent': True,
+            'isDomChat': 0,
+        }
+
+        place_url = self.config['order']['place']
+        encoded = json.dumps(data, ensure_ascii=False).encode('cp1252')
+
+        # Hoo boy
+        response = requests.post(place_url, data=encoded, headers=self._get_headers()).json()
+
+        if self.config['debug']:
+            logger.info("--------- PLACED ORDER RESPONSE -----------")
+            import pprint
+            pprint.pprint(response)
+            logger.info("--------- END PLACED ORDER RESPONSE -----------")
+
+        if response['Status'] == 0:
+            text = ""
+            try:
+                menu = self.get_menu_from_store(response['Order']['StoreID'])
+                text += "I have placed the following order:\n"
+                text += self._orders_to_text(response, menu)
+                text += "\nwith the following settings:\n"
+                text += self.settings_to_string(collection['settings'])
+            except:
+                text = "Your order was submitted successfully but " \
+                       "I had some issue creating the confirmation " \
+                       "message... Anyway the order will be ready."
+            return text, False
+
+        else:
+            text = "There were some issues placing your order:\n"
+            text += self.extract_error_message(response)
+            text += "\nPlease try again!"
+            return text, True
+
+    @staticmethod
+    def settings_to_string(settings):
+        text = ""
         service_method = settings['service_method'] if 'service_method' in settings else 'Delivery'
 
         if 'first_name' in settings:
@@ -311,11 +377,7 @@ class Dominos(Default):
                 settings['address']['coords']['lat'],
                 settings['address']['coords']['lng'],
             )
-
-        return text, validated_orders, False
-
-    def place_order(self, collection, orders, data):
-        return "Blerp", False
+        return text
 
     @staticmethod
     def extract_error_message(order):
