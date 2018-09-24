@@ -493,10 +493,14 @@ class Dominos(Default):
         )
 
     def set_time(self, arg, settings):
+        if arg == 'asap':
+            del settings['time']
+            return "I set your order time to ASAP: the pizza will be ready/delivered asap after you order it."
         try:
             t = time.strptime(arg, "%H:%M")
         except ValueError:
-            return "Sorry, I didn't understand that. Please specify a time in the 24-hour format, hh:mm"
+            return "Sorry, I didn't understand that. Please specify a time in the 24-hour format, hh:mm, " \
+                   "or type 'asap' to clear the time setting."
 
         settings['time'] = arg
         return "I set your order time to {} (on the same day as you place your order)".format(
