@@ -62,9 +62,10 @@ class PollBot:
         self.store_collection(new_collection)
 
     def mention(self, bot, update):
-        collection = self.get_collection(update.message.chat.id)
+        msg = update.message if update.message is not None else update.edited_message
+        collection = self.get_collection(msg.chat.id)
 
-        order_text = update.message.text.replace("@{}".format(self.config['bot_name']), "")
+        order_text = msg.text.replace("@{}".format(self.config['bot_name']), "")
         if len(order_text) > 400:
             order_text = order_text[:400] + "..."
         order_text = re.sub(r'\n\s*', "\n", order_text)
@@ -73,9 +74,9 @@ class PollBot:
             orders = self.db['orders']
             new_order = {
                 'collection_uuid': collection['uuid'],
-                'chat': update.message.chat.id,
-                'user_id': update.message.from_user.id,
-                'user_name': update.message.from_user.first_name,
+                'chat': msg.chat.id,
+                'user_id': msg.from_user.id,
+                'user_name': msg.from_user.first_name,
                 'order_text': order_text,
             }
             orders.upsert(new_order, ['chat', 'user_id'])
@@ -83,7 +84,7 @@ class PollBot:
             self.update_order_message(bot, collection)
 
         else:
-            update.message.reply_text("Uh oh - there is no ongoing order in this chat. Please /start me first.")
+            msg.reply_text("Uh oh - there is no ongoing order in this chat. Please /start me first.")
 
     def button(self, bot, update):
         query = update.callback_query
@@ -387,7 +388,7 @@ class PollBot:
         dp = updater.dispatcher
 
         # General commands
-        dp.add_handler(MentionsHandler(self.config['bot_name'], self.mention))
+        dp.add_handler(MentionsHandler(self.config['bot_name'], self.mention, edited_updates=True))
         dp.add_handler(CommandHandler("help", self.send_help))
         dp.add_handler(CommandHandler("start", self.start))
 
