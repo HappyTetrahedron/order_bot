@@ -583,9 +583,9 @@ class Dominos(Default):
         if best_product['ProductType'].lower() == 'pizza':
             size = STANDARD
             for word in order.replace(',', '').split(' '):
-                if word.strip() in synonyms_small:
+                if word.strip().lower() in synonyms_small:
                     size = SMALL
-                if word.strip() in synonyms_large:
+                if word.strip().lower() in synonyms_large:
                     size = LARGE
 
             code_prefix = str(size) + PIZZA_CODE_PREFIX
