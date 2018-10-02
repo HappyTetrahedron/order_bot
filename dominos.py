@@ -34,6 +34,18 @@ synonyms_large = [
 STANDARD, SMALL, LARGE = 30, 25, 35
 PIZZA_CODE_PREFIX = 'HT'  # H = standard crust. Dunno what the T stands for but it's the only option.
 
+CUSTOMIZE_MARGHERITA = [
+    "25HTMRG",
+    "30HTMRG",
+]
+
+PLAIN_MARGHERITA = [
+    "25HTSMRG",
+    "30HTSMRG",
+]
+
+PLAIN_MARGHERITA_CODE = "S_MRG"
+
 DEALS = [
     'N044',  # Crazy Tuesday
     'N054',  # Crazy Weekday
@@ -597,6 +609,15 @@ class Dominos(Default):
             toppings = {k: v for k, v in menu.get_toppings().items()
                         if 'Sauce' not in v['Tags'] or not v['Tags']['Sauce']}
             matching_toppings = self._find_matches(order, toppings)
+
+            # If it's a plain margherita, use the plain margherita menu item instead of the customizable margherita
+            # because dominos is dumb
+            if len(matching_toppings) == 0:
+                if dominos_order['Code'] in CUSTOMIZE_MARGHERITA:
+                    if PLAIN_MARGHERITA_CODE in menu.get_products().keys():
+                        # replace with corresponding plain margherita
+                        dominos_order['Code'] = PLAIN_MARGHERITA[CUSTOMIZE_MARGHERITA.index(dominos_order['Code'])]
+
             for match in matching_toppings:
                 quantity = 1
                 if match['word'] > 0:
