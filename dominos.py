@@ -747,7 +747,7 @@ class Dominos(Default):
                                 if o+nn < len(order_words):
                                     match = len(commonprefix(next_name_word, order_words[o+nn]))
                                     # Heuristic. Consider it a match if at least X characters match
-                                    if match > min(min_chars_subseq_words, len(next_name_word)):
+                                    if match >= min(min_chars_subseq_words, len(next_name_word)):
                                         matches.append(match)
                             # Heuristic. If the product has multiple words, at least X must match.
                             if len(matches) >= min(min_words, len(name_words)):
