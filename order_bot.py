@@ -117,7 +117,8 @@ class PollBot:
             bot.edit_message_text(
                 text=message,
                 message_id=query.message.message_id,
-                chat_id=query.message.chat.id
+                chat_id=query.message.chat.id,
+                parse_mode='markdown'
             )
 
             if not error:
@@ -206,7 +207,7 @@ class PollBot:
         if collection is None \
                 or 'active' not in collection \
                 or not collection['active']:
-            update.message.reply_text("Uh oh, looks like there is no ongoing order in this chat."
+            update.message.reply_text("Uh oh, looks like there is no ongoing order in this chat. "
                                       "Please /start me first.")
             return
 

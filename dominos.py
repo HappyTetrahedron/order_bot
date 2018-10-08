@@ -47,12 +47,14 @@ PLAIN_MARGHERITA = [
 PLAIN_MARGHERITA_CODE = "S_MRG"
 
 DEALS = [
-    'N044',  # Crazy Tuesday
-    'N054',  # Crazy Weekday
-    'L097',  # Take 3 Away
-    'N050',  # Double Deal S
-    'N051',  # Double Deal M
-    'N052',  # Double Deal L
+    'MEGACC',  # Mega Week with coke
+    'MEGA',    # Mega Week
+    'N044',    # Crazy Tuesday
+    'N054',    # Crazy Weekday
+    'L097',    # Take 3 Away
+    'N050',    # Double Deal S
+    'N051',    # Double Deal M
+    'N052',    # Double Deal L
 ]
 
 
@@ -334,7 +336,9 @@ class Dominos(Default):
             pprint.pprint(response)
             logger.info("--------- END PLACED ORDER RESPONSE -----------")
 
-        if response['Status'] == 0:
+        status_code = response['StatusItems'][0]['Code']
+
+        if response['Status'] == 0 or status_code == "Warning":
             text = ""
             try:
                 menu = self.get_menu_from_store(response['Order']['StoreID'])
@@ -342,6 +346,11 @@ class Dominos(Default):
                 text += self._orders_to_text(response, menu)
                 text += "\nwith the following settings:\n"
                 text += self.settings_to_string(collection['settings'])
+                if status_code != "Success":
+                    text += "\n\n Dominos reported an issue with your order:\n"
+                    text += "{}:\n".format(status_code)
+                    text += self.extract_error_message(response)
+                    text += "\nChances are your order was submitted anyway, though. If in doubt, call the store."
             except:
                 text = "Your order was submitted successfully but " \
                        "I had some issue creating the confirmation " \
