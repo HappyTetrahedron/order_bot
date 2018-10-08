@@ -572,15 +572,27 @@ class Dominos(Default):
             return ""
 
         string = ""
-        for k, v in validated_order['Options'].items():
-            if v == 0:
-                string += 'no '
-            if '1/1' in v and v['1/1'] == "1.5":
-                string += 'extra '
-            if '1/1' in v and v['1/1'] == "0.0":
-                string += 'no '
-            string += menu.get_toppings()[k]['Name']
-            string += ', '
+        # Do not use the description for pizza to avoid repeating all the default menu ingredients
+        if validated_order['CategoryCode'] == 'Pizza' or 'descriptions' not in validated_order:
+            for k, v in validated_order['Options'].items():
+                if v == 0:
+                    string += 'no '
+                if '1/1' in v:
+                    if v['1/1'] == "1.5":
+                        string += 'extra '
+                    elif v['1/1'] == "0" or v['1/1'] == "0.0":
+                        string += 'no '
+                    elif v['1/1'] == "1" or v['1/1'] == '1.0':
+                        pass
+                    else:
+                        string += '{} '.format(v['1/1'])
+
+                string += menu.get_toppings()[k]['Name']
+                string += ', '
+        else:
+            for desc in validated_order['descriptions']:
+                string += desc['value']
+                string += ', '
 
         if string.endswith(', '):
             string = string[:-2]
@@ -600,21 +612,31 @@ class Dominos(Default):
             'Options': self._get_default_toppings(best_product),
         }
 
-        # Step 2: Which size? (currently only for pizza)
-        if best_product['ProductType'].lower() == 'pizza':
-            size = STANDARD
-            for word in order.replace(',', '').split(' '):
-                if word.strip().lower() in synonyms_small:
-                    size = SMALL
-                if word.strip().lower() in synonyms_large:
-                    size = LARGE
+        # Step 2: Which size?
+        size = STANDARD
+        for word in order.replace(',', '').split(' '):
+            if word.strip().lower() in synonyms_small:
+                size = SMALL
+            if word.strip().lower() in synonyms_large:
+                size = LARGE
 
+        if best_product['ProductType'].lower() == 'pizza':
             code_prefix = str(size) + PIZZA_CODE_PREFIX
             for code in best_product['Variants']:
                 if code.startswith(code_prefix):
                     dominos_order['Code'] = code
+        else:
+            variants = best_product['Variants']
+            if len(variants) == 2 and size == LARGE:
+                dominos_order['Code'] = variants[1]
+            if len(variants) >= 3:
+                if size == STANDARD:
+                    dominos_order['Code'] = variants[1]
+                if size == LARGE:
+                    dominos_order['Code'] = variants[2]
 
-            # Step 3: For pizza: which toppings?
+        # Step 3: For pizza: which toppings?
+        if best_product['ProductType'].lower() == 'pizza':
             toppings = {k: v for k, v in menu.get_toppings().items()
                         if 'Sauce' not in v['Tags'] or not v['Tags']['Sauce']}
             matching_toppings = self._find_matches(order, toppings)
@@ -641,6 +663,22 @@ class Dominos(Default):
                     }
                 else:
                     dominos_order['Options'][match['product']['Code']] = 0
+
+        # Step 3: Which sides?
+        if best_product["AvailableSides"]:
+            sides = menu.get_sides()
+            matching_sides = self._find_matches(order, sides, min_words=1)
+            for match in matching_sides:
+                quantity = 1
+                if match['word'] > 0:
+                    word_before = order.split(',')[match['part']].strip().split(' ')[match['word'] - 1].lower()
+                    if word_before == 'no':
+                        quantity = 0
+                    if word_before.isdigit():
+                        quantity = int(word_before)
+                if match['product']['Code'] in best_product['AvailableSides']:
+                    dominos_order['Options'][match['product']['Code']] = {'1/1': str(quantity)}
+
         return dominos_order
 
     def _orders_to_text(self, validated_orders, dominos_menu):
@@ -692,7 +730,7 @@ class Dominos(Default):
         return options
 
     @staticmethod
-    def _find_matches(order, products, min_words=2, min_chars_first_word=3, min_chars_total=5):
+    def _find_matches(order, products, min_words=2, min_chars_first_word=3, min_chars_subseq_words=2, min_chars_total=5):
         matches_found = []
         order_parts = normalize('NFD', order).encode('ascii', 'ignore').decode('ascii').split(',')
         for part_index, part in enumerate(order_parts):
@@ -708,7 +746,8 @@ class Dominos(Default):
                             for nn, next_name_word in enumerate(name_words[n:]):
                                 if o+nn < len(order_words):
                                     match = len(commonprefix(next_name_word, order_words[o+nn]))
-                                    if match > 0:
+                                    # Heuristic. Consider it a match if at least X characters match
+                                    if match > min(min_chars_subseq_words, len(next_name_word)):
                                         matches.append(match)
                             # Heuristic. If the product has multiple words, at least X must match.
                             if len(matches) >= min(min_words, len(name_words)):
@@ -721,7 +760,8 @@ class Dominos(Default):
                                         'word': o,
                                         'product': p,
                                     })
-        matches_found.sort(key=lambda m: (m['len'], m['sum']), reverse=True)
+        # Cheat: sides are always last
+        matches_found.sort(key=lambda m: ('ProductType' not in m['product'] or m['product']['ProductType'] != 'Sides', m['len'], m['sum']), reverse=True)
         return matches_found
 
     def _get_coordinates(self, query):
@@ -759,6 +799,12 @@ class Menu:
 
     def get_toppings(self):
         return self.json['Toppings']['Pizza']
+
+    def get_sides(self):
+        sides = {}
+        for l in self.json['Sides'].values():
+            sides.update(l)
+        return sides
 
     def get_deals(self):
         return self.json['Coupons']

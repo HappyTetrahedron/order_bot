@@ -44,10 +44,10 @@ class Default:
         return "Uh oh - setting a name is irrelevant with your current order mode."
 
     def set_phone(self, arg, settings):
-        return "Uh oh - setting a name is irrelevant with your current order mode."
+        return "Uh oh - setting a phone number is irrelevant with your current order mode."
 
     def set_email(self, arg, settings):
-        return "Uh oh - setting a name is irrelevant with your current order mode."
+        return "Uh oh - setting an email address is irrelevant with your current order mode."
 
     def set_time(self, arg, settings):
         return "Uh oh - setting a time is irrelevant with your current order mode."
