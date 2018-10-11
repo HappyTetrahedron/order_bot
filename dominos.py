@@ -344,7 +344,7 @@ class Dominos(Default):
                 menu = self.get_menu_from_store(response['Order']['StoreID'])
                 text += "I have placed the following order:\n"
                 text += self._orders_to_text(response, menu)
-                text += "\nwith the following settings:\n"
+                text += "\n\nYour order has the following settings:\n"
                 text += self.settings_to_string(collection['settings'])
                 if status_code != "Success":
                     text += "\n\n Dominos reported an issue with your order:\n"
