@@ -46,7 +46,10 @@ PLAIN_MARGHERITA = [
 
 PLAIN_MARGHERITA_CODE = "S_MRG"
 
-SAUCE_WORDS = ['sauce']
+SAUCE_WORDS = [
+    'sauce',
+    'base',
+]
 
 DEALS = [
     'MEGACC',  # Mega Week with coke
