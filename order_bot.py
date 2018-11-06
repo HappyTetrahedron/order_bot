@@ -106,6 +106,11 @@ class PollBot:
                 )
                 return
 
+            if 'issuer_id' in collection:
+                if collection['issuer_id'] != update.callback_query.from_user.id:
+                    update.callback_query.answer("Only the person who started the order can confirm it.")
+                    return
+
             data = json.loads(collection['data'])
 
             table = self.db['orders']
@@ -224,6 +229,7 @@ class PollBot:
         data_string = json.dumps(data, separators=(',', ':'))
 
         collection['data'] = data_string
+        collection['issuer_id'] = update.message.from_user.id
         self.store_collection(collection)
 
         inline_keyboard_items = [
