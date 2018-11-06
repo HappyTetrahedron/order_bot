@@ -658,7 +658,6 @@ class Dominos(Default):
                 word_after = ""
                 if len(words) > match['word'] + match['len']:
                     word_after = words[match['word'] + match['len']].lower()
-                    logging.info(word_after)
                 if last_word in SAUCE_WORDS or word_after in SAUCE_WORDS:  # Sauce was ordered
                     if 'Sauce' not in match['product']['Tags'] or not match['product']['Tags']['Sauce']:
                         # This isn't sauce
