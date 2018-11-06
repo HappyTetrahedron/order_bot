@@ -46,15 +46,17 @@ PLAIN_MARGHERITA = [
 
 PLAIN_MARGHERITA_CODE = "S_MRG"
 
+SAUCE_WORDS = ['sauce']
+
 DEALS = [
     'MEGACC',  # Mega Week with coke
-    'MEGA',    # Mega Week
-    'N044',    # Crazy Tuesday
-    'N054',    # Crazy Weekday
-    'L097',    # Take 3 Away
-    'N050',    # Double Deal S
-    'N051',    # Double Deal M
-    'N052',    # Double Deal L
+    'MEGA',  # Mega Week
+    'N044',  # Crazy Tuesday
+    'N054',  # Crazy Weekday
+    'L097',  # Take 3 Away
+    'N050',  # Double Deal S
+    'N051',  # Double Deal M
+    'N052',  # Double Deal L
 ]
 
 
@@ -132,8 +134,8 @@ class Dominos(Default):
                 weekday = today.strftime('%a')
                 available_days = deals[deal_id]['Tags']['Days']
                 if not (
-                    isinstance(available_days, str) and weekday.startswith(available_days)
-                    or any([weekday.startswith(day) for day in available_days])
+                        isinstance(available_days, str) and weekday.startswith(available_days)
+                        or any([weekday.startswith(day) for day in available_days])
                 ):
                     continue
             # Is the deal available for this service method?
@@ -455,7 +457,7 @@ class Dominos(Default):
     def set_store(self, query, settings):
         if len(query) <= 0:
             return "You need to provide an argument for this command. Which store do you " + \
-                                      "want to use? (Provide a location)"
+                   "want to use? (Provide a location)"
         store = self.get_closest_store(query)
 
         if store is None:
@@ -588,6 +590,8 @@ class Dominos(Default):
                         string += '{} '.format(v['1/1'])
 
                 string += menu.get_toppings()[k]['Name']
+                if 'Sauce' in menu.get_toppings()[k]['Tags'] and menu.get_toppings()[k]['Tags']['Sauce']:
+                    string += " (base)"
                 string += ', '
         else:
             for desc in validated_order['descriptions']:
@@ -637,10 +641,8 @@ class Dominos(Default):
 
         # Step 3: For pizza: which toppings?
         if best_product['ProductType'].lower() == 'pizza':
-            toppings = {k: v for k, v in menu.get_toppings().items()
-                        if 'Sauce' not in v['Tags'] or not v['Tags']['Sauce']}
+            toppings = menu.get_toppings()
             matching_toppings = self._find_matches(order, toppings)
-
             # If it's a plain margherita, use the plain margherita menu item instead of the customizable margherita
             # because dominos is dumb
             if len(matching_toppings) == 0:
@@ -650,19 +652,35 @@ class Dominos(Default):
                         dominos_order['Code'] = PLAIN_MARGHERITA[CUSTOMIZE_MARGHERITA.index(dominos_order['Code'])]
 
             for match in matching_toppings:
-                quantity = 1
-                if match['word'] > 0:
-                    word_before = order.split(',')[match['part']].strip().split(' ')[match['word'] - 1].lower()
-                    if word_before == 'no':
-                        quantity = 0
-                    if word_before == 'extra':
-                        quantity = 1.5
-                if quantity > 0:
-                    dominos_order['Options'][match['product']['Code']] = {
-                        '1/1': str(quantity)
-                    }
-                else:
-                    dominos_order['Options'][match['product']['Code']] = 0
+                keep = True
+                words = order.split(',')[match['part']].strip().split(' ')
+                last_word = words[match['word'] + match['len'] - 1].lower()
+                word_after = ""
+                if len(words) > match['word'] + match['len']:
+                    word_after = words[match['word'] + match['len']].lower()
+                    logging.info(word_after)
+                if last_word in SAUCE_WORDS or word_after in SAUCE_WORDS:  # Sauce was ordered
+                    if 'Sauce' not in match['product']['Tags'] or not match['product']['Tags']['Sauce']:
+                        # This isn't sauce
+                        keep = False
+                else:  # We don't want sauce
+                    if 'Sauce' in match['product']['Tags'] and match['product']['Tags']['Sauce']:
+                        # This is sauce
+                        keep = False
+                if keep:
+                    quantity = 1
+                    if match['word'] > 0:
+                        word_before = words[match['word'] - 1].lower()
+                        if word_before == 'no':
+                            quantity = 0
+                        if word_before == 'extra':
+                            quantity = 1.5
+                    if quantity > 0:
+                        dominos_order['Options'][match['product']['Code']] = {
+                            '1/1': str(quantity)
+                        }
+                    else:
+                        dominos_order['Options'][match['product']['Code']] = 0
 
         # Step 3: Which sides?
         if best_product["AvailableSides"]:
@@ -730,7 +748,8 @@ class Dominos(Default):
         return options
 
     @staticmethod
-    def _find_matches(order, products, min_words=2, min_chars_first_word=3, min_chars_subseq_words=2, min_chars_total=5):
+    def _find_matches(order, products, min_words=2, min_chars_first_word=3, min_chars_subseq_words=2,
+                      min_chars_total=5):
         matches_found = []
         order_parts = normalize('NFD', order).encode('ascii', 'ignore').decode('ascii').split(',')
         for part_index, part in enumerate(order_parts):
@@ -744,8 +763,8 @@ class Dominos(Default):
                         if match >= min(min_chars_first_word, len(name_word)):
                             matches = []
                             for nn, next_name_word in enumerate(name_words[n:]):
-                                if o+nn < len(order_words):
-                                    match = len(commonprefix(next_name_word, order_words[o+nn]))
+                                if o + nn < len(order_words):
+                                    match = len(commonprefix(next_name_word, order_words[o + nn]))
                                     # Heuristic. Consider it a match if at least X characters match
                                     if match >= min(min_chars_subseq_words, len(next_name_word)):
                                         matches.append(match)
@@ -761,7 +780,8 @@ class Dominos(Default):
                                         'product': p,
                                     })
         # Cheat: sides are always last
-        matches_found.sort(key=lambda m: ('ProductType' not in m['product'] or m['product']['ProductType'] != 'Sides', m['len'], m['sum']), reverse=True)
+        matches_found.sort(key=lambda m: (
+        'ProductType' not in m['product'] or m['product']['ProductType'] != 'Sides', m['len'], m['sum']), reverse=True)
         return matches_found
 
     def _get_coordinates(self, query):
