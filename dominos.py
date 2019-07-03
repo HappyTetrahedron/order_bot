@@ -52,7 +52,7 @@ SAUCE_WORDS = [
 ]
 
 DEALS = [
-    'NEWCT',  # New Crazy Tuesday
+    'NEWCT1',  # New Crazy Tuesday
     'MEGACC',  # Mega Week with coke
     'MEGA',  # Mega Week
     'N044',  # Crazy Tuesday
