@@ -3,3 +3,4 @@
 *.db
 config.yml
 __pycache__/
+venv

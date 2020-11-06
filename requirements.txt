@@ -1,0 +1,4 @@
+pyyaml
+requests
+dataset
+python-telegram-bot

@@ -10,8 +10,8 @@ import json
 from uuid import uuid4
 
 from telegram import TelegramError, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Updater, CommandHandler, CallbackQueryHandler
-from mentions_handler import MentionsHandler
+from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, MessageHandler
+from mentions_handler import MentionFilter
 from dominos import Dominos
 from default import Default
 
@@ -38,7 +38,7 @@ class PollBot:
         self.config = None
         self.backends = {}
 
-    def start(self, bot, update):
+    def start(self, update, context):
         """Send a message when the command /start is issued."""
         defaults = self.db['defaults']
         default_settings = defaults.find_one(chat=update.message.chat.id)
@@ -61,7 +61,7 @@ class PollBot:
         new_collection['message'] = msg.message_id
         self.store_collection(new_collection)
 
-    def mention(self, bot, update):
+    def mention(self, update, context):
         msg = update.message if update.message is not None else update.edited_message
         collection = self.get_collection(msg.chat.id)
 
@@ -81,15 +81,15 @@ class PollBot:
             }
             orders.upsert(new_order, ['chat', 'user_id'])
 
-            self.update_order_message(bot, collection)
+            self.update_order_message(context.bot, collection)
 
         else:
             msg.reply_text("Uh oh - there is no ongoing order in this chat. Please /start me first.")
 
-    def button(self, bot, update):
+    def button(self, update, context):
         query = update.callback_query
         if query.data == 'cancel':
-            bot.edit_message_text(
+            context.bot.edit_message_text(
                 text="Alright, I cancelled the order. You can keep making changes and try again, or /close it.",
                 message_id=query.message.message_id,
                 chat_id=query.message.chat.id
@@ -99,7 +99,7 @@ class PollBot:
             collection = self.get_collection(query.message.chat.id)
             if 'data' not in collection:
                 # uhm?
-                bot.edit_message_text(
+                context.bot.edit_message_text(
                     text="There was an error of sorts, it seems... Please just try again.",
                     message_id=query.message.message_id,
                     chat_id=query.message.chat.id
@@ -119,7 +119,7 @@ class PollBot:
 
             message, error = self.get_backend(collection).place_order(collection, orders, data)
 
-            bot.edit_message_text(
+            context.bot.edit_message_text(
                 text=message,
                 message_id=query.message.message_id,
                 chat_id=query.message.chat.id,
@@ -130,7 +130,7 @@ class PollBot:
                 collection['active'] = False
                 self.store_collection(collection)
 
-    def delete(self, bot, update):
+    def delete(self, update, context):
         collection = self.get_collection(update.message.chat.id)
         if not collection:
             return
@@ -138,9 +138,9 @@ class PollBot:
 
         orders.delete(collection_uuid=collection['uuid'], user_id=update.message.from_user.id)
 
-        self.update_order_message(bot, collection)
+        self.update_order_message(context.bot, collection)
 
-    def set_mode(self, bot, update):
+    def set_mode(self, update, context):
         arg = self.get_command_arg(update.message.text)
 
         modes = ""
@@ -162,7 +162,7 @@ class PollBot:
             settings['mode'] = arg
             return self.backends[arg].mode_selected_message
 
-        reply_string = self.configure_settings(bot, update.message.chat.id, setter)
+        reply_string = self.configure_settings(context.bot, update.message.chat.id, setter)
         update.message.reply_text(reply_string)
 
     def set_backend_specific_setting(self, setting_key, bot, update):
@@ -176,7 +176,7 @@ class PollBot:
         reply_string = self.configure_settings(bot, update.message.chat.id, setter)
         update.message.reply_text(reply_string)
 
-    def print_settings(self, bot, update):
+    def print_settings(self, update, context):
         settings, is_global = self.get_settings(update.message.chat.id)
         if is_global:
             msg = "Global settings:\n"
@@ -189,7 +189,7 @@ class PollBot:
                 msg += "{}: {}\n".format(k, v)
             update.message.reply_text(msg)
 
-    def close_order(self, bot, update):
+    def close_order(self, update, context):
         collection = self.get_collection(update.message.chat.id)
 
         if collection is not None:
@@ -197,7 +197,7 @@ class PollBot:
             self.store_collection(collection)
         update.message.reply_text("I closed your ongoing order. You can always /reopen it.")
 
-    def reopen_order(self, bot, update):
+    def reopen_order(self, update, context):
         collection = self.get_collection(update.message.chat.id)
 
         if collection is not None:
@@ -207,7 +207,7 @@ class PollBot:
         else:
             update.message.reply_text("Uh oh, there is no order in this chat that I could reopen.")
 
-    def place_order(self, bot, update):
+    def place_order(self, update, context):
         collection = self.get_collection(update.message.chat.id)
         if collection is None \
                 or 'active' not in collection \
@@ -240,7 +240,7 @@ class PollBot:
         update.message.reply_text(message, reply_markup=inline_keyboard, parse_mode='markdown')
 
     # Help command handler
-    def send_help(self, bot, update):
+    def send_help(self, update, context):
         """Send a message when the command /help is issued."""
         helptext = "Hey! I'm an order bot. I collect orders from members of your group chat.\n" \
             "Just add me to a group chat and send me the /start command.\n" \
@@ -253,9 +253,11 @@ class PollBot:
         update.message.reply_text(helptext)
 
     # Error handler
-    def error(self, bot, update, error):
+    def error(self, update, context):
         """Log Errors caused by Updates."""
-        logger.warning('Update "%s" caused error "%s"', update, error)
+        logger.warning('Update "%s" caused error "%s"', update, context.error)
+        import traceback
+        traceback.print_exception(type(context.error), context.error, context.error.__traceback__)
 
     def configure_settings(self, bot, chat_id, setter_func):
         collection = self.get_collection(chat_id)
@@ -395,7 +397,8 @@ class PollBot:
         dp = updater.dispatcher
 
         # General commands
-        dp.add_handler(MentionsHandler(self.config['bot_name'], self.mention, edited_updates=True))
+        # dp.add_handler(MentionsHandler(self.config['bot_name'], self.mention, edited_updates=True))
+        dp.add_handler(MessageHandler(MentionFilter(self.config['bot_name']), self.mention, edited_updates=True))
         dp.add_handler(CommandHandler("help", self.send_help))
         dp.add_handler(CommandHandler("start", self.start))
 
