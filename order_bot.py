@@ -415,22 +415,22 @@ class PollBot:
         dp.add_handler(CommandHandler("mode", self.set_mode))
 
         # Backend specific configuration
-        dp.add_handler(CommandHandler("store", lambda bot, update:
-                                      self.set_backend_specific_setting('store', bot, update)))
-        dp.add_handler(CommandHandler("servicemethod", lambda bot, update:
-                                      self.set_backend_specific_setting('service_method', bot, update)))
-        dp.add_handler(CommandHandler("method", lambda bot, update:
-                                      self.set_backend_specific_setting('service_method', bot, update)))
-        dp.add_handler(CommandHandler("address", lambda bot, update:
-                                      self.set_backend_specific_setting('address', bot, update)))
-        dp.add_handler(CommandHandler("name", lambda bot, update:
-                                      self.set_backend_specific_setting('name', bot, update)))
-        dp.add_handler(CommandHandler("phone", lambda bot, update:
-                                      self.set_backend_specific_setting('phone', bot, update)))
-        dp.add_handler(CommandHandler("email", lambda bot, update:
-                                      self.set_backend_specific_setting('email', bot, update)))
-        dp.add_handler(CommandHandler("time", lambda bot, update:
-                                      self.set_backend_specific_setting('time', bot, update)))
+        dp.add_handler(CommandHandler("store", lambda update, context:
+                                      self.set_backend_specific_setting('store', context.bot, update)))
+        dp.add_handler(CommandHandler("servicemethod", lambda update, context:
+                                      self.set_backend_specific_setting('service_method', context.bot, update)))
+        dp.add_handler(CommandHandler("method", lambda update, context:
+                                      self.set_backend_specific_setting('service_method', context.bot, update)))
+        dp.add_handler(CommandHandler("address", lambda update, context:
+                                      self.set_backend_specific_setting('address', context.bot, update)))
+        dp.add_handler(CommandHandler("name", lambda update, context:
+                                      self.set_backend_specific_setting('name', context.bot, update)))
+        dp.add_handler(CommandHandler("phone", lambda update, context:
+                                      self.set_backend_specific_setting('phone', context.bot, update)))
+        dp.add_handler(CommandHandler("email", lambda update, context:
+                                      self.set_backend_specific_setting('email', context.bot, update)))
+        dp.add_handler(CommandHandler("time", lambda update, context:
+                                      self.set_backend_specific_setting('time', context.bot, update)))
 
         dp.add_handler(CallbackQueryHandler(self.button))
 
